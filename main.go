@@ -9,25 +9,25 @@ import (
 
 // Phase 1: variables and constants
 
-const (
+const ( // phase-1
 	// One whole token = 10^Decimals base units. pump.fun tokens use 6 decimals.
-	Decimals = 6
-	Unit     = int64(1_000_000)
+	Decimals = 6                 // phase-1
+	Unit     = int64(1_000_000) // phase-1
 
 	// Base units of the base asset needed for one base unit of token.
 	// 1 = a flat 1:1 sale. Const, not var: it's a rule of the sale, not state,
 	// so nothing can reassign it by accident from the other side of the file.
-	PriceBaseUnits = int64(1)
-)
+	PriceBaseUnits = int64(1) // phase-1
+) // phase-1
 
 // var, not const: these are things you'd want to change at runtime later
 // (Phase 7 turns them into CLI flags), and startingBalance is computed from
 // Unit rather than typed out as a literal.
 // var and not := because := only works inside a function.
-var (
-	numUsers        = 5
-	startingBalance = 100 * Unit
-)
+var ( // phase-1
+	numUsers        = 5          // phase-1
+	startingBalance = 100 * Unit // phase-1
+) // phase-1
 
 // Phase 2: the User struct
 
