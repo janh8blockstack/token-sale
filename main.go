@@ -11,7 +11,7 @@ import (
 
 const ( // phase-1
 	// One whole token = 10^Decimals base units. pump.fun tokens use 6 decimals.
-	Decimals = 6                 // phase-1
+	Decimals = 6                // phase-1
 	Unit     = int64(1_000_000) // phase-1
 
 	// Base units of the base asset needed for one base unit of token.
@@ -41,11 +41,11 @@ var ( // phase-1
 // Fields are capitalized, which means exported. Doesn't matter in a one package
 // program, but it's the right default: move this into its own package and
 // unexported fields become unreachable. It's also what lets %+v see them.
-type User struct {
-	Name         string
-	BaseBalance  int64 // base asset held, in base units
-	TokenBalance int64 // sale token held, in base units
-}
+type User struct { // phase-2
+	Name         string // phase-2
+	BaseBalance  int64  // base asset held, in base units // phase-2
+	TokenBalance int64  // sale token held, in base units // phase-2
+} // phase-2
 
 // Phase 3: methods, functions, and errors
 
@@ -184,15 +184,15 @@ func main() {
 		formatUnits(PriceBaseUnits*Unit), Decimals)
 
 	// Phase 2 checkpoint: one user built by hand, printed with %+v.
-	fmt.Println("\n== Phase 2: one user, struct literal ==")
-	alice := User{
-		Name:         "alice",
-		BaseBalance:  50 * Unit,
-		TokenBalance: 0,
-	}
-	fmt.Printf("  %+v\n", alice)
-	fmt.Println("  (raw base units above, printSummary formats them:)")
-	printSummary(alice)
+	fmt.Println("\n== Phase 2: one user, struct literal ==") // phase-2
+	alice := User{                                           // phase-2
+		Name:         "alice",   // phase-2
+		BaseBalance:  50 * Unit, // phase-2
+		TokenBalance: 0,         // phase-2
+	} // phase-2
+	fmt.Printf("  %+v\n", alice)                                        // phase-2
+	fmt.Println("  (raw base units above, printSummary formats them:)") // phase-2
+	printSummary(alice)                                                 // phase-2
 
 	// Phase 3 checkpoint, part one: watch the value receiver do nothing.
 	fmt.Println("\n== Phase 3a: the value receiver trap ==")
