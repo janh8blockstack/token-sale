@@ -87,6 +87,59 @@ unchanged, byte for byte. Deduct then validate is how you get negative balances.
 | 6 | self review (`gofmt`, `go vet`) | ongoing, clean |
 | 7 | maps, `Sale` state, interfaces, tests, flags, concurrency | later |
 
+## Phase-by-phase: lines and concepts
+
+Line numbers are current as of `main.go` on this branch; they'll drift as Phase
+5+ code gets added above/below.
+
+### Phase 1 — variables and constants (`main.go:10-30`)
+
+| block | lines |
+|---|---|
+| `const` (`Decimals`, `Unit`, `PriceBaseUnits`) | 12-21 |
+| `var` (`numUsers`, `startingBalance`) | 27-30 |
+
+Concepts: package declaration and imports · grouped `const`/`var` blocks ·
+`const` vs `var` (compiler-enforced immutability for the price) · untyped vs
+explicitly-typed constants · explicit type conversion (`int64(...)`) ·
+numeric literal underscores (`1_000_000`) · type inference on `var` ·
+package-level scope (why `:=` isn't legal here, only inside functions) ·
+derived constants (`startingBalance` computed from `Unit`, not hardcoded).
+
+### Phase 2 — the `User` struct (`main.go:32-48`, checkpoint `main.go:186-195`)
+
+Concepts: `type ... struct { ... }` declaration · struct fields as
+`name type` pairs · exported vs unexported identifiers via capitalization ·
+why capitalization matters for `%+v` (reflection can't see unexported
+fields) · `int64` over `float64` for money · named-field struct literals ·
+`:=` short variable declaration (legal here, illegal at package scope) ·
+the `%+v` formatting verb · passing a struct by value into a read-only
+function (`printSummary`).
+
+### Phase 3 — methods, functions, errors (`main.go:50-130`, checkpoint `main.go:197-227`)
+
+Concepts: sentinel errors via `errors.New` · methods and receivers ·
+pointer vs value receivers, the core lesson (`fundByValue` mutates a copy
+and does nothing observable; `Fund`/`Buy` use `*User` and actually mutate) ·
+the `if err := f(); err != nil` idiom · error wrapping with `%w` and
+`errors.Is` · `error` as the conventional last return value · validate
+before mutate (a rejected `Buy` leaves the user untouched) · `fmt` verbs
+including a variable-width format (`%0*d`) · local `:=`/`=` inside a
+function body.
+
+### Phase 4 — slices and loops (`main.go:132-179`, checkpoint `main.go:229-242`)
+
+Concepts: slices (`[]User`) · `make` in both forms — `make([]User, 0, n)`
+(zero length, pre-reserved capacity, for `append`) vs `make([]User, n)`
+(n zero-valued elements up front, for index assignment) · `append` growth ·
+the append-after-presized-make trap (flagged in the code comment) ·
+`for i := range n` (ranging over a bare int, Go 1.22+) · `for i := range
+users` (index-only range) · `for _, u := range users` (blank identifier,
+and the range-copy semantics that Phase 5 will have to stop relying on) ·
+struct literals inside a loop with an omitted field taking its zero value ·
+`fmt.Sprintf` for building names (`user%02d`) · guard clauses
+(`if n < 0 { n = 0 }`).
+
 ### The Phase 5 trap, in advance
 
 Phase 4's print loop uses `for _, u := range users`, which is safe because
