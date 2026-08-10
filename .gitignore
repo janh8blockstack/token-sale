@@ -1,1 +1,5 @@
 tokensale
+
+
+
+# This tells Git to ignore the file named tokensale — that's the compiled binary sitting in your directory (built by go build, which names the output after the module). Without this, every rebuild would show up as a changed/untracked binary file in git status, cluttering diffs with a huge blob that should never be committed (compiled artifacts belong out of source control since they're regenerated from source).
