@@ -51,20 +51,20 @@ type User struct { // phase-2
 
 // Sentinel errors, so callers can check with errors.Is instead of matching on
 // the message text.
-var (
-	ErrInvalidAmount     = errors.New("amount must be positive")
-	ErrInsufficientFunds = errors.New("insufficient balance")
-)
+var ( // phase-3
+	ErrInvalidAmount     = errors.New("amount must be positive") // phase-3
+	ErrInsufficientFunds = errors.New("insufficient balance")    // phase-3
+) // phase-3
 
 // Fund adds to the user's base asset balance.
 // Pointer receiver because it has to change the real user, not a copy.
-func (u *User) Fund(amount int64) error {
-	if amount <= 0 {
-		return fmt.Errorf("fund %s: %w", formatUnits(amount), ErrInvalidAmount)
-	}
-	u.BaseBalance += amount
-	return nil
-}
+func (u *User) Fund(amount int64) error { // phase-3
+	if amount <= 0 { // phase-3
+		return fmt.Errorf("fund %s: %w", formatUnits(amount), ErrInvalidAmount) // phase-3
+	} // phase-3
+	u.BaseBalance += amount // phase-3
+	return nil              // phase-3
+} // phase-3
 
 // The same thing with a VALUE receiver, kept as the Phase 3 experiment. It
 // compiles, it runs, and it does nothing.
@@ -74,9 +74,9 @@ func (u *User) Fund(amount int64) error {
 // the copy is thrown away on return. Only *User gets you the original.
 //
 // Lowercase name because it's a demo, not something to actually call.
-func (u User) fundByValue(amount int64) {
-	u.BaseBalance += amount
-}
+func (u User) fundByValue(amount int64) { // phase-3
+	u.BaseBalance += amount // phase-3
+} // phase-3
 
 // Buy purchases tokenAmount base units at the current price.
 //
@@ -84,50 +84,50 @@ func (u User) fundByValue(amount int64) {
 // a failure means. Phase 5 skips that user and keeps going, a test asserts on
 // it, a CLI exits non zero. Printing decides for all of them, and you can't ask
 // a fmt.Println afterwards whether it fired.
-func (u *User) Buy(tokenAmount int64) error {
-	if tokenAmount <= 0 {
-		return fmt.Errorf("buy %s: %w", formatUnits(tokenAmount), ErrInvalidAmount)
-	}
+func (u *User) Buy(tokenAmount int64) error { // phase-3
+	if tokenAmount <= 0 { // phase-3
+		return fmt.Errorf("buy %s: %w", formatUnits(tokenAmount), ErrInvalidAmount) // phase-3
+	} // phase-3
 
 	// Can't overflow while the price is 1. A bonding curve would need a check
 	// here, since costs near the top of the curve get very large.
-	cost := tokenAmount * PriceBaseUnits
+	cost := tokenAmount * PriceBaseUnits // phase-3
 
-	if cost > u.BaseBalance {
-		return fmt.Errorf("buy %s tokens: costs %s, balance is %s: %w",
+	if cost > u.BaseBalance { // phase-3
+		return fmt.Errorf("buy %s tokens: costs %s, balance is %s: %w", // phase-3
 			formatUnits(tokenAmount), formatUnits(cost), formatUnits(u.BaseBalance),
 			ErrInsufficientFunds)
-	}
+	} // phase-3
 
 	// Both checks passed before anything changed, so a rejected buy leaves the
 	// user untouched. Deducting first is how you end up with negative balances.
-	u.BaseBalance -= cost
-	u.TokenBalance += tokenAmount
-	return nil
-}
+	u.BaseBalance -= cost         // phase-3
+	u.TokenBalance += tokenAmount // phase-3
+	return nil                    // phase-3
+} // phase-3
 
 // printSummary prints one line for a user.
 //
 // A plain function rather than a method, taking User by value: it only reads,
 // and how a user gets displayed isn't really the type's business. Keeping it
 // out here means the same User can be a table row now and JSON later.
-func printSummary(u User) {
-	fmt.Printf("  %-8s  base: %12s   tokens: %12s\n",
+func printSummary(u User) { // phase-3
+	fmt.Printf("  %-8s  base: %12s   tokens: %12s\n", // phase-3
 		u.Name, formatUnits(u.BaseBalance), formatUnits(u.TokenBalance))
-}
+} // phase-3
 
 // formatUnits turns base units into something readable. The only place in the
 // program where a decimal point exists. The arithmetic never sees a fraction.
-func formatUnits(v int64) string {
-	sign := ""
-	if v < 0 {
-		sign = "-"
-		v = -v
-	}
+func formatUnits(v int64) string { // phase-3
+	sign := "" // phase-3
+	if v < 0 { // phase-3
+		sign = "-" // phase-3
+		v = -v     // phase-3
+	} // phase-3
 	// %0*d reads its width from the Decimals operand, so the zero padding can't
 	// fall out of sync with the constant.
-	return fmt.Sprintf("%s%d.%0*d", sign, v/Unit, Decimals, v%Unit)
-}
+	return fmt.Sprintf("%s%d.%0*d", sign, v/Unit, Decimals, v%Unit) // phase-3
+} // phase-3
 
 // Phase 4: slices and loops
 
@@ -138,22 +138,22 @@ func formatUnits(v int64) string {
 //   - nil slice (var users []User). append works, but it grows and copies as it
 //     goes. Right when you don't know n, wasteful when you do.
 //   - slice literal []User{...}, for a fixed set you write out by hand.
-func newUsers(n int, startingBalance int64) []User {
-	if n < 0 {
-		n = 0 // make panics on negative capacity
-	}
+func newUsers(n int, startingBalance int64) []User { // phase-4
+	if n < 0 { // phase-4
+		n = 0 // make panics on negative capacity // phase-4
+	} // phase-4
 
-	users := make([]User, 0, n)
-	for i := range n {
-		users = append(users, User{
-			Name:        fmt.Sprintf("user%02d", i+1),
-			BaseBalance: startingBalance,
+	users := make([]User, 0, n) // phase-4
+	for i := range n {          // phase-4
+		users = append(users, User{ // phase-4
+			Name:        fmt.Sprintf("user%02d", i+1), // phase-4
+			BaseBalance: startingBalance,              // phase-4
 			// TokenBalance left out. Omitted fields get their zero value,
 			// which for int64 is the 0 we want anyway.
-		})
-	}
-	return users
-}
+		}) // phase-4
+	} // phase-4
+	return users // phase-4
+} // phase-4
 
 // Same slice, built the other way: allocate all n up front, assign by index.
 //
@@ -163,20 +163,20 @@ func newUsers(n int, startingBalance int64) []User {
 //
 // Both versions are fine. Indexing when you know n, append when users show up
 // conditionally or one at a time.
-func newUsersPresized(n int, startingBalance int64) []User {
-	if n < 0 {
-		n = 0
-	}
+func newUsersPresized(n int, startingBalance int64) []User { // phase-4
+	if n < 0 { // phase-4
+		n = 0 // phase-4
+	} // phase-4
 
-	users := make([]User, n)
-	for i := range users {
-		users[i] = User{
-			Name:        fmt.Sprintf("user%02d", i+1),
-			BaseBalance: startingBalance,
-		}
-	}
-	return users
-}
+	users := make([]User, n) // phase-4
+	for i := range users {   // phase-4
+		users[i] = User{ // phase-4
+			Name:        fmt.Sprintf("user%02d", i+1), // phase-4
+			BaseBalance: startingBalance,              // phase-4
+		} // phase-4
+	} // phase-4
+	return users // phase-4
+} // phase-4
 
 // main walks the checkpoints in order.
 func main() {
@@ -195,51 +195,51 @@ func main() {
 	printSummary(alice)                                                 // phase-2
 
 	// Phase 3 checkpoint, part one: watch the value receiver do nothing.
-	fmt.Println("\n== Phase 3a: the value receiver trap ==")
-	fmt.Printf("  before fundByValue: %s\n", formatUnits(alice.BaseBalance))
-	alice.fundByValue(25 * Unit)
-	fmt.Printf("  after  fundByValue: %s   <- unchanged, it mutated a copy\n",
+	fmt.Println("\n== Phase 3a: the value receiver trap ==")                   // phase-3
+	fmt.Printf("  before fundByValue: %s\n", formatUnits(alice.BaseBalance))   // phase-3
+	alice.fundByValue(25 * Unit)                                               // phase-3
+	fmt.Printf("  after  fundByValue: %s   <- unchanged, it mutated a copy\n", // phase-3
 		formatUnits(alice.BaseBalance))
 
 	// Part two: the pointer version, and both branches of Buy.
-	fmt.Println("\n== Phase 3b: pointer receivers actually mutate ==")
-	if err := alice.Fund(25 * Unit); err != nil {
-		fmt.Printf("  fund failed: %v\n", err)
-	} else {
-		fmt.Printf("  after  Fund:        %s\n", formatUnits(alice.BaseBalance))
-	}
+	fmt.Println("\n== Phase 3b: pointer receivers actually mutate ==") // phase-3
+	if err := alice.Fund(25 * Unit); err != nil {                      // phase-3
+		fmt.Printf("  fund failed: %v\n", err) // phase-3
+	} else { // phase-3
+		fmt.Printf("  after  Fund:        %s\n", formatUnits(alice.BaseBalance)) // phase-3
+	} // phase-3
 
 	// A buy she can afford.
-	if err := alice.Buy(30 * Unit); err != nil {
-		fmt.Printf("  buy failed: %v\n", err)
-	} else {
-		fmt.Println("  bought 30 tokens")
-		printSummary(alice)
-	}
+	if err := alice.Buy(30 * Unit); err != nil { // phase-3
+		fmt.Printf("  buy failed: %v\n", err) // phase-3
+	} else { // phase-3
+		fmt.Println("  bought 30 tokens") // phase-3
+		printSummary(alice)               // phase-3
+	} // phase-3
 
 	// A buy she can't, so the error path, plus proof nothing moved.
-	if err := alice.Buy(1000 * Unit); err != nil {
-		fmt.Printf("  buy rejected: %v\n", err)
-		fmt.Printf("  errors.Is(err, ErrInsufficientFunds) = %t\n",
+	if err := alice.Buy(1000 * Unit); err != nil { // phase-3
+		fmt.Printf("  buy rejected: %v\n", err)                     // phase-3
+		fmt.Printf("  errors.Is(err, ErrInsufficientFunds) = %t\n", // phase-3
 			errors.Is(err, ErrInsufficientFunds))
-		fmt.Println("  balances after the failed buy (must be untouched):")
-		printSummary(alice)
-	}
+		fmt.Println("  balances after the failed buy (must be untouched):") // phase-3
+		printSummary(alice)                                                 // phase-3
+	} // phase-3
 
 	// Phase 4 checkpoint: N users in a slice, printed in a loop.
 	// range copies each element into u, which is safe here because
 	// printSummary only reads. Phase 5 is where that stops being true.
-	fmt.Printf("\n== Phase 4: %d users, built with append ==\n", numUsers)
-	users := newUsers(numUsers, startingBalance)
-	for _, u := range users {
-		printSummary(u)
-	}
+	fmt.Printf("\n== Phase 4: %d users, built with append ==\n", numUsers) // phase-4
+	users := newUsers(numUsers, startingBalance)                           // phase-4
+	for _, u := range users {                                              // phase-4
+		printSummary(u) // phase-4
+	} // phase-4
 
-	fmt.Printf("\n== Phase 4: the same %d users, pre sized and indexed ==\n", numUsers)
-	sameUsers := newUsersPresized(numUsers, startingBalance)
-	for _, u := range sameUsers {
-		printSummary(u)
-	}
+	fmt.Printf("\n== Phase 4: the same %d users, pre sized and indexed ==\n", numUsers) // phase-4
+	sameUsers := newUsersPresized(numUsers, startingBalance)                            // phase-4
+	for _, u := range sameUsers {                                                       // phase-4
+		printSummary(u) // phase-4
+	} // phase-4
 
 	fmt.Println("\nPhases 1 to 4 complete. Phase 5 (everyone buys) is next.")
 }
