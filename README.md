@@ -178,6 +178,7 @@ above, just guarding against a moving price instead of an empty one.
 | 5 | everyone buys, the `range` copy gotcha | done |
 | 6 | self review (`gofmt`, `go vet`) | reviewed — naming, receivers, tag consistency checked by hand; `gofmt`/`go vet` need a real Go toolchain to confirm |
 | 7 | maps, `Sale` state, interfaces, tests, flags, concurrency | done — all six stretch goals built (`main.go:208-621`, `main_test.go`) |
+| 8 | real identity (`crypto/ed25519`) + a hash-chained receipt log (`crypto/sha256`) | done — not part of the original phase plan; the "after Phase 7" crypto plan, built |
 
 **Phase 7, at a glance:**
 
@@ -211,6 +212,35 @@ exactly matching the ones documented in the code —
 (`s.totalTokensSold += tokenAmount`), both inside `unsafeBuy`. The Phase 7d
 section of that same run — the locked version — produced zero race
 warnings. This is as verified as this project gets without a CI pipeline.
+
+**Phase 8, at a glance** (not part of the original 7-phase plan — the
+"After Phase 7: Go crypto" section below used to be only a plan; it's now
+built):
+
+- **`crypto/ed25519` identity** — `newSignedUser` returns a `*User` (with a
+  `PublicKey`) and its matching private key *separately* — the private key
+  never touches the `User` struct at all, same as a real wallet never
+  handing its key to a server. `Sale.SignedBuy` wraps `Sale.Buy` with a
+  signature-verification gate in front; a forged signature is rejected
+  before `Sale.Buy` (and its pricing/mutation) ever runs.
+- **`crypto/sha256` hash-chained receipts** — `Receipt`/`newReceipt` build
+  an append-only chain, each entry's `Hash` covering the previous entry's
+  `Hash` plus its own fields. `verifyChain` recomputes every hash rather
+  than trusting the stored one, and returns the index of the first broken
+  link. Tampering with any past receipt (checkpoint `main.go`, Phase 8b)
+  is caught immediately.
+- **What's deliberately out of scope**: no replay protection on signed buys
+  (the same valid signature could be resubmitted — a real system would need
+  a nonce), and the receipt chain isn't persisted anywhere, just built and
+  verified in memory for the checkpoint. Both are called out in code
+  comments rather than silently ignored.
+
+Verified the same way as Phase 7: `go build`, `gofmt`, `go vet`,
+`go test -race ./...` (now 4 test functions, including `TestSignedBuy` and
+`TestReceiptChain`), and `go run .` / `go run -race .` all pass clean.
+Phase 8 introduced zero new data races — the same 3 warnings as before, all
+still inside `unsafeBuy`, confirmed by diffing the race output before and
+after.
 
 ## Phase-by-phase: lines and concepts
 
@@ -500,30 +530,46 @@ some are product calls nobody but the team can make.
   eventually? That decides how much of the mutex/rounding/slippage work
   needs to be airtight versus just understood.
 
-## After Phase 7: Go crypto
+## Phase 8: Go crypto — built
 
-Parked until all of Phase 7 is done — two ideas that fit this project
-specifically, not generic "add some crypto" filler.
+Was parked until all of Phase 7 was done ("After Phase 7: Go crypto," the
+plan below described but didn't build this); Phase 7 finished, so this did
+too. Two ideas that fit this project specifically, not generic "add some
+crypto" filler — see "Phase 8, at a glance" above for the built version.
 
-**1. `crypto/ed25519` as real `User` identity.** Solana signs everything
-with ed25519, and it's been in Go's stdlib since 1.13 — zero third-party
-dependencies. Each `User` would get a keypair; `Buy` would require a signed
-request, verified against the user's public key, before executing. The
-recommended one: it's thematically exact (same algorithm the real chain
-uses), small to add, and teaches signature verification as a concept
-genuinely separate from the mutex work — a signed request can't be forged
-even under concurrent access, though it doesn't replace the mutex (that's
-still about ordering, not authenticity).
+**1. `crypto/ed25519` as real `User` identity — built.** Solana signs
+everything with ed25519, and it's been in Go's stdlib since 1.13 — zero
+third-party dependencies. `User` gained a `PublicKey` field (`main.go:59`);
+`newSignedUser` generates a keypair and hands the private key back
+separately, never stored on `User`; `Sale.SignedBuy` (`main.go`, Phase 8)
+requires a valid signature, verified against the public key, before
+delegating to the real `Sale.Buy`. Confirmed doing real work, not just
+compiling: a forged signature (one flipped bit) is rejected even against a
+real, already-funded buyer — checkpoint `main.go`, Phase 8a, and
+`TestSignedBuy`. As predicted, this is authenticity, a concept genuinely
+separate from the mutex's ordering guarantee — neither substitutes for the
+other.
 
-**2. `crypto/sha256` as a hash-chained receipt log.** Each successful `Buy`
-appends a small record — `hash(prevHash + user + amount + totalTokensSold)`
-— to an audit slice. Cheap (a handful of lines), and it's the same idea a
-real chain uses to make transaction history tamper-evident.
+**2. `crypto/sha256` as a hash-chained receipt log — built.** `Receipt` and
+`newReceipt` (`main.go`, Phase 8) build an append-only chain, each entry
+hashing the previous entry's hash plus its own fields —
+`sha256(prevHash + buyer + amount + totalTokensSold)`. `verifyChain` walks
+the chain and recomputes every hash rather than trusting the stored one.
+Confirmed catching real tampering, not just building cleanly: mutating a
+past receipt's amount without recomputing its hash is caught immediately by
+`verifyChain` — checkpoint `main.go`, Phase 8b, and `TestReceiptChain`.
 
 **Steer away from:** `crypto/rand` for ordinary simulation randomness (e.g.
 randomizing goroutine start order for a demo) — that package is for actual
 secrets and is overkill there. `math/rand/v2` is the right, idiomatic tool
-for anything that isn't security-sensitive.
+for anything that isn't security-sensitive. (`crypto/rand` *is* used
+correctly once, in `newSignedUser` — that's a genuine secret, a private
+key, which is exactly the case it's meant for.)
+
+**Deliberately out of scope:** no replay protection on `SignedBuy` (a valid
+signature could be resubmitted; a real system needs a nonce), and receipts
+aren't persisted anywhere — both are noted in code comments, not silently
+skipped.
 
 ## Sources
 

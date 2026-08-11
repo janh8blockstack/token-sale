@@ -3,11 +3,14 @@
 package main
 
 import (
-	"errors" // phase-3
-	"flag"   // phase-7: CLI flags for numUsers, startingBalance, and the curve
-	"fmt"    // phase-1
-	"math"   // phase-7: math.Exp for the curve, math.Ceil for round-up-on-cost
-	"sync"   // phase-7: sync.Mutex guards Sale's shared state
+	"crypto/ed25519" // phase-8: real signing — the same algorithm Solana uses for every transaction
+	"crypto/rand"    // phase-8: a real secret (a private key) — the one place in this file crypto/rand is the correct tool, unlike simulation randomness elsewhere
+	"crypto/sha256"  // phase-8: the receipt chain's hash
+	"errors"         // phase-3
+	"flag"           // phase-7: CLI flags for numUsers, startingBalance, and the curve
+	"fmt"            // phase-1
+	"math"           // phase-7: math.Exp for the curve, math.Ceil for round-up-on-cost
+	"sync"           // phase-7: sync.Mutex guards Sale's shared state
 )
 
 // Phase 1: variables and constants
@@ -48,6 +51,12 @@ type User struct { // phase-2
 	Name         string // phase-2
 	BaseBalance  int64  // base asset held, in base units // phase-2
 	TokenBalance int64  // sale token held, in base units // phase-2
+	// PublicKey added in Phase 8, not Phase 2 — safe because every User{}
+	// literal in this file already names its fields, so an omitted
+	// PublicKey just takes its zero value (nil), same as TokenBalance did
+	// back in Phase 4 (main.go:151-154). Phases 1-7's users simply have no
+	// registered key; only Phase 8's newSignedUser sets one.
+	PublicKey ed25519.PublicKey // phase-8: this User's address, not a secret — the matching private key never lives on this struct
 } // phase-2
 
 // Phase 3: methods, functions, and errors
@@ -398,6 +407,121 @@ func attemptPurchase(b Buyer, tokenAmount int64) error { // phase-7
 	return b.Buy(tokenAmount) // phase-7
 } // phase-7
 
+// Phase 8: real identity via crypto/ed25519
+
+// ErrInvalidSignature covers both "no key registered" and "signature
+// doesn't verify" — one sentinel, not two, since a caller checking
+// errors.Is(err, ErrInvalidSignature) shouldn't need to care which of
+// those happened; either way, the request isn't authenticated.
+var ErrInvalidSignature = errors.New("invalid signature") // phase-8
+
+// newSignedUser builds one User with a fresh ed25519 keypair, and returns
+// the private key SEPARATELY — never stored on User at all. Same reason a
+// real wallet's private key never touches a server: only the public key
+// (the address) is something the User/Sale side ever needs to know. The
+// caller of newSignedUser is the only one who ever holds the private key,
+// and only for as long as it takes to sign a request.
+func newSignedUser(name string, startingBalance int64) (*User, ed25519.PrivateKey, error) { // phase-8
+	pub, priv, err := ed25519.GenerateKey(rand.Reader) // phase-8: crypto/rand.Reader — this is a genuine secret, the one case in this file where crypto/rand (not math/rand/v2) is the right tool
+	if err != nil {                                    // phase-8
+		return nil, nil, fmt.Errorf("generate keypair for %s: %w", name, err) // phase-8
+	} // phase-8
+	u := &User{ // phase-8
+		Name:        name,            // phase-8
+		BaseBalance: startingBalance, // phase-8
+		PublicKey:   pub,             // phase-8
+	} // phase-8
+	return u, priv, nil // phase-8
+} // phase-8
+
+// signBuyMessage returns the exact bytes a buyer signs to authorize one
+// purchase — canonical and unambiguous, so a signature over "buy 30
+// tokens" can't be reinterpreted as authorizing 3000. No nonce here, which
+// a real system would need (the same valid signature could otherwise be
+// replayed to buy twice) — left out to keep this checkpoint focused on
+// verification itself, not a full anti-replay design.
+func signBuyMessage(userName string, tokenAmount int64) []byte { // phase-8
+	return fmt.Appendf(nil, "buy:%s:%d", userName, tokenAmount) // phase-8
+} // phase-8
+
+// SignedBuy is Sale.Buy with one gate in front: the caller must prove they
+// hold the private key matching u.PublicKey by supplying a valid signature
+// over signBuyMessage(u.Name, tokenAmount). This is authenticity — a
+// different property from Sale.Buy's mutex, which is about ordering. A
+// forged request can't get through here even under concurrent access, and
+// a genuinely signed request can still race another one the exact way
+// Phase 7c demonstrated — the two mechanisms solve different problems, and
+// neither substitutes for the other.
+func (s *Sale) SignedBuy(u *User, tokenAmount int64, signature []byte) error { // phase-8
+	if len(u.PublicKey) == 0 { // phase-8
+		return fmt.Errorf("signed buy for %s: %w", u.Name, ErrInvalidSignature) // phase-8: no key registered — reuses ErrInvalidSignature rather than inventing a third failure mode
+	} // phase-8
+	message := signBuyMessage(u.Name, tokenAmount)        // phase-8
+	if !ed25519.Verify(u.PublicKey, message, signature) { // phase-8: constant-time under the hood, not a plain byte == on the signature
+		return fmt.Errorf("signed buy for %s: %w", u.Name, ErrInvalidSignature) // phase-8
+	} // phase-8
+	// Verified — hand off to the real Buy rather than duplicating its
+	// pricing/mutation logic. One source of truth; this method only adds
+	// the gate in front of it.
+	return s.Buy(u, tokenAmount) // phase-8
+} // phase-8
+
+// Phase 8: a hash-chained receipt log
+
+// Receipt is one link in the chain — a record of one successful buy, bound
+// to the record before it via PrevHash. Changing any past receipt changes
+// its own Hash, which then no longer matches what the NEXT receipt
+// recorded as PrevHash — tampering with history breaks the chain visibly,
+// the same idea a real blockchain uses.
+//
+// Fields exported, like User's (not like Sale's): a receipt is a data
+// record you might want %+v or JSON on someday, not internal-only state
+// the way Sale's mutex-guarded counter is.
+type Receipt struct { // phase-8
+	PrevHash        [32]byte // phase-8
+	Buyer           string   // phase-8
+	TokenAmount     int64    // phase-8
+	TotalTokensSold int64    // phase-8: Sale's state at the moment of this buy, baked into the hash too
+	Hash            [32]byte // phase-8: sha256 of everything above — this receipt's own identity
+} // phase-8
+
+// newReceipt builds the next link, given the previous one's hash (or the
+// zero value, for the first receipt in a chain).
+func newReceipt(prevHash [32]byte, buyer string, tokenAmount, totalTokensSold int64) Receipt { // phase-8
+	r := Receipt{ // phase-8
+		PrevHash:        prevHash,        // phase-8
+		Buyer:           buyer,           // phase-8
+		TokenAmount:     tokenAmount,     // phase-8
+		TotalTokensSold: totalTokensSold, // phase-8
+	} // phase-8
+	// Covers PrevHash plus every field above it. %x/%d with colon
+	// separators is unambiguous enough for this demo since none of these
+	// fields can themselves contain a colon; a real system would want a
+	// fixed-width or length-prefixed encoding instead of relying on that.
+	data := fmt.Sprintf("%x:%s:%d:%d", r.PrevHash, r.Buyer, r.TokenAmount, r.TotalTokensSold) // phase-8
+	r.Hash = sha256.Sum256([]byte(data))                                                      // phase-8
+	return r                                                                                  // phase-8
+} // phase-8
+
+// verifyChain walks receipts and confirms each one's Hash really is
+// sha256 of its own fields, and that each PrevHash really matches the
+// previous receipt's Hash. Returns the index of the first broken link, or
+// -1 if the whole chain is intact.
+func verifyChain(receipts []Receipt) int { // phase-8
+	var prevHash [32]byte        // phase-8: zero value — the first receipt's PrevHash must be all-zero
+	for i, r := range receipts { // phase-8: range-by-value is fine — this only ever reads
+		if r.PrevHash != prevHash { // phase-8
+			return i // phase-8
+		} // phase-8
+		want := newReceipt(r.PrevHash, r.Buyer, r.TokenAmount, r.TotalTokensSold) // phase-8: recompute — never trust r.Hash itself, derive the true one
+		if r.Hash != want.Hash {                                                  // phase-8
+			return i // phase-8
+		} // phase-8
+		prevHash = r.Hash // phase-8
+	} // phase-8
+	return -1 // phase-8
+} // phase-8
+
 // startingBalanceTokens is the flag target for -balance, in WHOLE tokens —
 // friendlier on a command line than typing a base-unit count. startingBalance
 // itself (base units) is still computed from this × Unit after flag.Parse(),
@@ -615,7 +739,63 @@ func main() {
 	fmt.Printf("  actual   totalTokensSold: %s   <- always matches, lock or no luck\n", // phase-7
 		formatUnits(safeSale.totalTokensSold))
 
-	fmt.Println("\nPhases 1 to 7 complete: shared state, the exponential curve, maps, interfaces,")
-	fmt.Println("CLI flags, and the concurrency race + fix are all built. See main_test.go for the")
+	// Phase 8 checkpoint, part one: ed25519 identity + signed buys.
+	fmt.Println("\n== Phase 8a: ed25519 identity + signed buys ==")       // phase-8
+	signedUser, signedPriv, err := newSignedUser("dave", startingBalance) // phase-8
+	if err != nil {                                                       // phase-8
+		fmt.Printf("  keypair generation failed: %v\n", err) // phase-8
+	} else { // phase-8
+		var signedSale Sale                                                           // phase-8
+		msg := signBuyMessage(signedUser.Name, buyAmount)                             // phase-8
+		validSig := ed25519.Sign(signedPriv, msg)                                     // phase-8: signing happens here, with the private key, never inside SignedBuy — same as a real wallet signing locally before submitting
+		if err := signedSale.SignedBuy(signedUser, buyAmount, validSig); err != nil { // phase-8
+			fmt.Printf("  valid signature rejected (bug): %v\n", err) // phase-8
+		} else { // phase-8
+			fmt.Printf("  %s: valid signature accepted, bought %s tokens\n", signedUser.Name, formatUnits(buyAmount)) // phase-8
+		} // phase-8
+
+		// Same request, deliberately corrupted signature — proof forgery
+		// doesn't work even against a real, already-successful buyer.
+		forgedSig := make([]byte, len(validSig))                                       // phase-8
+		copy(forgedSig, validSig)                                                      // phase-8
+		forgedSig[0] ^= 0xFF                                                           // phase-8: flip one bit — ed25519 signatures don't degrade gracefully, this is enough to invalidate it completely
+		if err := signedSale.SignedBuy(signedUser, buyAmount, forgedSig); err != nil { // phase-8
+			fmt.Printf("  forged signature correctly rejected: %v\n", err) // phase-8
+		} else { // phase-8
+			fmt.Println("  forged signature accepted (bug!)") // phase-8
+		} // phase-8
+	} // phase-8
+
+	// Phase 8 checkpoint, part two: the hash-chained receipt log.
+	fmt.Println("\n== Phase 8b: hash-chained receipts ==") // phase-8
+	var receipts []Receipt                                 // phase-8: nil slice — append grows it, same reasoning newUsers gave for starting empty in Phase 4
+	var chainSale Sale                                     // phase-8
+	chainUsers := newUsers(3, startingBalance)             // phase-8
+	for i := range chainUsers {                            // phase-8: index-only range — the same lesson Phase 5 already taught still applies
+		if err := chainSale.Buy(&chainUsers[i], buyAmount); err != nil { // phase-8
+			fmt.Printf("  %s: buy failed: %v\n", chainUsers[i].Name, err) // phase-8
+			continue                                                      // phase-8
+		} // phase-8
+		var prevHash [32]byte  // phase-8
+		if len(receipts) > 0 { // phase-8
+			prevHash = receipts[len(receipts)-1].Hash // phase-8: chain to the actual previous receipt, not assumed order
+		} // phase-8
+		receipts = append(receipts, newReceipt(prevHash, chainUsers[i].Name, buyAmount, chainSale.totalTokensSold)) // phase-8
+	} // phase-8
+	fmt.Printf("  %d receipts recorded, chain intact: %t\n", len(receipts), verifyChain(receipts) == -1) // phase-8
+
+	if len(receipts) > 0 { // phase-8
+		// Tamper with history after the fact — exactly what an attacker
+		// would try — without recomputing its hash, and prove verifyChain
+		// catches it.
+		receipts[0].TokenAmount = 999 * Unit                                                        // phase-8
+		broken := verifyChain(receipts)                                                             // phase-8
+		fmt.Printf("  after tampering with receipt 0: chain intact = %t, first broken link = %d\n", // phase-8
+			broken == -1, broken)
+	} // phase-8
+
+	fmt.Println("\nAll 8 phases complete: Phases 1-6 (fundamentals), Phase 7 (shared state,")
+	fmt.Println("the exponential curve, maps, interfaces, CLI flags, concurrency), and Phase 8")
+	fmt.Println("(ed25519 signed buys, sha256 hash-chained receipts). See main_test.go for the")
 	fmt.Println("table-driven tests (run with `go test ./...`, not part of this program's own output).")
 }

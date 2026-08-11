@@ -1,7 +1,9 @@
 package main
 
 import (
-	"errors" // errors.Is — checking the sentinel, not the message text, same rule Buy itself follows
+	"crypto/ed25519" // for signing a request in the test itself, playing the role of the buyer's wallet
+	"errors"         // errors.Is — checking the sentinel, not the message text, same rule Buy itself follows
+	"fmt"            // building receipt buyer names for TestReceiptChain
 	"testing"
 )
 
@@ -111,4 +113,54 @@ func TestSaleBuy(t *testing.T) { // phase-7
 			} // phase-7
 		})
 	}
+}
+
+// TestSignedBuy covers both directions: a genuinely signed request goes
+// through, and a forged one is rejected — the actual property SignedBuy
+// adds on top of Sale.Buy.
+func TestSignedBuy(t *testing.T) { // phase-8
+	u, priv, err := newSignedUser("test", 100*Unit) // phase-8
+	if err != nil {                                 // phase-8
+		t.Fatalf("newSignedUser: %v", err) // phase-8
+	} // phase-8
+
+	var sale Sale                          // phase-8
+	msg := signBuyMessage(u.Name, 30*Unit) // phase-8
+	validSig := ed25519.Sign(priv, msg)    // phase-8: signing here, with priv, the way a wallet would — never inside SignedBuy itself
+
+	if err := sale.SignedBuy(u, 30*Unit, validSig); err != nil { // phase-8
+		t.Fatalf("SignedBuy with valid signature = %v, want nil", err) // phase-8
+	} // phase-8
+
+	forged := make([]byte, len(validSig)) // phase-8
+	copy(forged, validSig)                // phase-8
+	forged[0] ^= 0xFF                     // phase-8: flip one bit — enough to invalidate an ed25519 signature completely
+	// Same u, same sale, already-successful buyer — proof forgery still
+	// doesn't work even against a real, funded account.
+	err = sale.SignedBuy(u, 30*Unit, forged)  // phase-8
+	if !errors.Is(err, ErrInvalidSignature) { // phase-8
+		t.Fatalf("SignedBuy with forged signature = %v, want ErrInvalidSignature", err) // phase-8
+	} // phase-8
+}
+
+// TestReceiptChain covers both directions: an honestly built chain
+// verifies clean, and tampering with any past entry is caught.
+func TestReceiptChain(t *testing.T) { // phase-8
+	var receipts []Receipt                             // phase-8
+	amounts := []int64{10 * Unit, 20 * Unit, 5 * Unit} // phase-8
+	var prevHash [32]byte                              // phase-8
+	for i, amt := range amounts {                      // phase-8: range-by-value — only reading amt, never mutating
+		r := newReceipt(prevHash, fmt.Sprintf("user%02d", i+1), amt, int64(i+1)*amt) // phase-8
+		receipts = append(receipts, r)                                               // phase-8
+		prevHash = r.Hash                                                            // phase-8
+	} // phase-8
+
+	if broken := verifyChain(receipts); broken != -1 { // phase-8
+		t.Fatalf("verifyChain on an untampered chain = %d, want -1", broken) // phase-8
+	} // phase-8
+
+	receipts[0].TokenAmount = 999 * Unit              // phase-8: tamper without recomputing Hash — exactly what an attacker would try
+	if broken := verifyChain(receipts); broken != 0 { // phase-8
+		t.Fatalf("verifyChain after tampering with receipt 0 = %d, want 0", broken) // phase-8
+	} // phase-8
 }
