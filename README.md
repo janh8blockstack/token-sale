@@ -85,6 +85,34 @@ information away. Failures are sentinel wrapped, so callers use
 **`Buy` validates before it mutates.** A rejected purchase leaves the user
 unchanged, byte for byte. Deduct then validate is how you get negative balances.
 
+**Concurrent buys are serialized through a `sync.Mutex`, not left racy.**
+Phase 7 spawns one goroutine per buyer, all calling into the same
+`Sale.Buy`. The read-modify-write inside it (`totalTokensSold`, and each
+buyer's balance) is not atomic, so two goroutines racing through it can both
+read the same value before either writes it back — a lost update that
+silently corrupts balances, not a crash you'd notice. `Sale.mu.Lock()` /
+`Unlock()` around exactly that critical section turns "many goroutines" back
+into "one caller at a time" for the one part that actually needs it;
+everything before the lock (spawning, argument prep) still runs concurrently.
+
+**The mutex fixes corruption. It does not fix slippage — that's a separate
+guard.** Slippage is the gap between the price a buyer expected and the price
+they actually got, and on this curve it has a structural cause, not a bug:
+every goroutine serialized through the mutex above is buying against a
+`totalTokensSold` that whoever went before it just moved. First to the lock
+gets the price it expected; everyone behind it in that queue correctly pays
+more — the curve moved while they were waiting, same as parallel requests
+racing to buy the same rising asset in real life. Locking harder doesn't fix
+that, because there's nothing wrong to fix — it's the queue that has to be
+allowed to end up somewhere. The actual guard is a caller-supplied minimum:
+`Buy` takes a `minTokensOut`, computes the real cost against the current
+`totalTokensSold` at the buyer's actual turn, and if that's worse than the
+caller's minimum, returns `ErrSlippageExceeded` *before* touching any
+balance — same validate-before-mutate discipline as `ErrInsufficientFunds`
+above, just guarding against a moving price instead of an empty one.
+
+![Diagram: four concurrent requests queue through Sale.Buy's mutex one at a time; each later turn buys against a higher totalTokensSold and pays more; the fourth turn's price exceeds its minTokensOut tolerance and is rejected with ErrSlippageExceeded before any balance changes](slippage-concurrency.svg)
+
 ## Phase map
 
 | phase | what | status |
