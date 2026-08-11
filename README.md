@@ -6,9 +6,19 @@ A token sale simulation in Go, built phase by phase. **Phases 1 to 4 are done.**
 go run .
 ```
 
+## Architecture
+
+![Architecture: the User and Sale data model, the Buy purchase pipeline with its exponential pricing formula, and the mutex-guarded concurrency section](architecture.svg)
+
+Shows where the project stands (`User`, done, Phase 2) alongside where Phase 7
+is headed (`Sale`, the exponential pricing formula, and the `sync.Mutex`
+critical section) — see the phase map below for what's actually built today.
+
 ## About the pump.fun bonding curve
 
-The starting assumption was "exponential bonding curve". That's not what pump.fun uses.
+The starting assumption was "exponential bonding curve". That's not what pump.fun
+uses. This section is background on pump.fun's real mechanism, not a description
+of what this project builds — see "Where the curve goes" below for that.
 
 pump.fun runs a constant product AMM (Uniswap V2, `x·y = k`) over *virtual* reserves:
 
@@ -50,7 +60,7 @@ Phase 1 asks for "a constant for the token price (start at 1:1)", and Phases 2 t
 every buyer, which is exactly the `Sale` struct from Phase 7 stretch goal 2.
 Building it now would mean skipping the receiver lesson to get there.
 
-So Phases 1 to 4 use a flat 1:1 price, with the types chosen so the curve drops
+So Phases 1 to 4 use a flat 1:1 price, with the types chosen so a curve drops
 in later.
 
 ## Design decisions worth knowing
@@ -152,12 +162,20 @@ output rather than reading here.
 ### Where the curve goes
 
 Phase 7 stretch goal 2 (a `Sale` struct holding shared state) is the natural
-home. Put `virtualSolReserves` and `virtualTokenReserves` on it, replace the
-`PriceBaseUnits` constant with
-`func (s *Sale) BuyTokens(u *User, solIn int64) error`, and the constant product
-formula above becomes two lines of integer arithmetic. `Buy` moving from `*User`
-to `*Sale` is the point: the price stops being a property of the buyer and
-becomes a property of the market.
+home for pricing to leave `PriceBaseUnits` behind — but not with the
+constant-product formula above. This project's curve is a true exponential
+curve, `price(supply) = basePrice × e^(k × totalTokensSold)`: inspired by the
+same "early buyers pay less" shape as pump.fun, implemented with different,
+simpler math. It is not a reimplementation of pump.fun's actual contract.
+
+`Sale` holds `totalTokensSold`; `Buy` moves from `*User` to
+`func (s *Sale) Buy(u *User, tokenAmount int64) error`, pricing off that shared
+counter. `Buy` moving from `*User` to `*Sale` is the point: the price stops
+being a property of the buyer and becomes a property of the market.
+
+`e^x` has no exact integer form, so the curve math needs `float64` internally,
+rounded to `int64` base units only at the boundary, right before it touches a
+stored balance — the one deliberate exception to the int64-only rule below.
 
 ## Sources
 

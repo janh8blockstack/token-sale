@@ -1,0 +1,124 @@
+<svg viewBox="0 0 1000 790" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Architecture diagram: the User and Sale data model, the Buy purchase pipeline with its exponential pricing formula, and the mutex-guarded concurrency section.">
+  <defs>
+    <marker id="arrInk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#10201d"></path>
+    </marker>
+    <marker id="arrTeal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#007a94"></path>
+    </marker>
+    <marker id="arrAmber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b3660b"></path>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1000" height="790" fill="#ffffff" stroke="#c9d6d1" stroke-width="1"></rect>
+
+  <text x="500" y="36" text-anchor="middle" font-size="21" font-weight="700" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, 'Courier New', monospace">Token Sale — Architecture &amp; Pricing</text>
+  <text x="500" y="56" text-anchor="middle" font-size="11.5" fill="#55665f" font-family="ui-sans-serif, 'Segoe UI', Arial, sans-serif">Go bonding-curve simulation — data model, purchase pipeline, pricing formula, concurrency guard</text>
+
+  <!-- Section A: data model -->
+  <text x="60" y="86" font-size="12" font-weight="700" fill="#007a94" font-family="ui-monospace, Menlo, Consolas, monospace">DATA MODEL</text>
+
+  <rect x="60" y="96" width="300" height="104" rx="4" fill="#ffffff" stroke="#10201d" stroke-width="1.3"></rect>
+  <text x="210" y="116" text-anchor="middle" font-size="12" font-weight="700" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">User</text>
+  <text x="210" y="130" text-anchor="middle" font-size="9.5" fill="#55665f" font-family="ui-sans-serif, Arial, sans-serif">Phase 2 — done</text>
+  <text x="76" y="150" font-size="10.5" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">Name           string</text>
+  <text x="76" y="164" font-size="10.5" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">BaseBalance    int64  // base units</text>
+  <text x="76" y="178" font-size="10.5" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">TokenBalance   int64  // base units</text>
+
+  <rect x="640" y="96" width="300" height="104" rx="4" fill="#ffffff" stroke="#b3660b" stroke-width="1.3"></rect>
+  <text x="790" y="116" text-anchor="middle" font-size="12" font-weight="700" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">Sale</text>
+  <text x="790" y="130" text-anchor="middle" font-size="9.5" fill="#55665f" font-family="ui-sans-serif, Arial, sans-serif">Phase 7 — planned</text>
+  <text x="656" y="150" font-size="10.5" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">totalTokensSold int64</text>
+  <text x="656" y="164" font-size="10.5" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">mu   sync.Mutex</text>
+  <text x="656" y="178" font-size="10.5" fill="#55665f" font-family="ui-sans-serif, Arial, sans-serif">// shared market state</text>
+
+  <line x1="360" y1="148" x2="640" y2="148" stroke="#55665f" stroke-width="1" stroke-dasharray="4 3"></line>
+  <text x="500" y="141" text-anchor="middle" font-size="10" fill="#55665f" font-family="ui-monospace, Menlo, Consolas, monospace">Buy(u, amount) reads/writes both</text>
+
+  <!-- Section B: purchase pipeline -->
+  <text x="60" y="232" font-size="12" font-weight="700" fill="#007a94" font-family="ui-monospace, Menlo, Consolas, monospace">PURCHASE PIPELINE — Buy(u, amount)</text>
+
+  <rect x="40" y="242" width="130" height="76" rx="4" fill="#ffffff" stroke="#10201d" stroke-width="1.2"></rect>
+  <text x="105" y="272" text-anchor="middle" font-size="10.5" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">Buy(u, amount)</text>
+  <text x="105" y="286" text-anchor="middle" font-size="10.5" fill="#55665f" font-family="ui-sans-serif, Arial, sans-serif">called</text>
+
+  <rect x="198" y="242" width="130" height="76" rx="4" fill="#ffffff" stroke="#10201d" stroke-width="1.2"></rect>
+  <text x="263" y="266" text-anchor="middle" font-size="10.5" fill="#10201d" font-family="ui-sans-serif, Arial, sans-serif">validate</text>
+  <text x="263" y="280" text-anchor="middle" font-size="10.5" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">amount &gt; 0</text>
+  <text x="263" y="294" text-anchor="middle" font-size="9.5" fill="#55665f" font-family="ui-monospace, Menlo, Consolas, monospace">→ ErrInvalidAmount</text>
+
+  <rect x="356" y="242" width="130" height="76" rx="4" fill="#ffffff" stroke="#007a94" stroke-width="2"></rect>
+  <text x="421" y="266" text-anchor="middle" font-size="10.5" fill="#007a94" font-family="ui-sans-serif, Arial, sans-serif">price =</text>
+  <text x="421" y="280" text-anchor="middle" font-size="10" fill="#007a94" font-family="ui-monospace, Menlo, Consolas, monospace">f(totalTokensSold)</text>
+  <text x="421" y="296" text-anchor="middle" font-size="9.5" fill="#55665f" font-family="ui-sans-serif, Arial, sans-serif">curve formula ↓</text>
+
+  <rect x="514" y="242" width="130" height="76" rx="4" fill="#ffffff" stroke="#007a94" stroke-width="2"></rect>
+  <text x="579" y="266" text-anchor="middle" font-size="10.5" fill="#007a94" font-family="ui-sans-serif, Arial, sans-serif">cost =</text>
+  <text x="579" y="282" text-anchor="middle" font-size="11" fill="#007a94" font-family="ui-monospace, Menlo, Consolas, monospace">∫ price ds</text>
+  <text x="579" y="296" text-anchor="middle" font-size="9.5" fill="#55665f" font-family="ui-sans-serif, Arial, sans-serif">see formula ↓</text>
+
+  <rect x="672" y="242" width="130" height="76" rx="4" fill="#ffffff" stroke="#10201d" stroke-width="1.2"></rect>
+  <text x="737" y="266" text-anchor="middle" font-size="10.5" fill="#10201d" font-family="ui-sans-serif, Arial, sans-serif">check</text>
+  <text x="737" y="280" text-anchor="middle" font-size="9.5" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">BaseBalance ≥ cost</text>
+  <text x="737" y="294" text-anchor="middle" font-size="9" fill="#55665f" font-family="ui-monospace, Menlo, Consolas, monospace">→ ErrInsufficientFunds</text>
+
+  <rect x="830" y="242" width="130" height="76" rx="4" fill="#ffffff" stroke="#b3660b" stroke-width="2"></rect>
+  <text x="895" y="264" text-anchor="middle" font-size="9.5" fill="#b3660b" font-family="ui-sans-serif, Arial, sans-serif">mutex-protected:</text>
+  <text x="895" y="280" text-anchor="middle" font-size="10" fill="#b3660b" font-family="ui-monospace, Menlo, Consolas, monospace">deduct + add</text>
+  <text x="895" y="294" text-anchor="middle" font-size="9.5" fill="#b3660b" font-family="ui-monospace, Menlo, Consolas, monospace">sold += amount</text>
+
+  <line x1="170" y1="280" x2="196" y2="280" stroke="#10201d" stroke-width="1.2" marker-end="url(#arrInk)"></line>
+  <line x1="328" y1="280" x2="354" y2="280" stroke="#007a94" stroke-width="1.4" marker-end="url(#arrTeal)"></line>
+  <line x1="486" y1="280" x2="512" y2="280" stroke="#10201d" stroke-width="1.2" marker-end="url(#arrInk)"></line>
+  <line x1="644" y1="280" x2="670" y2="280" stroke="#10201d" stroke-width="1.2" marker-end="url(#arrInk)"></line>
+  <line x1="802" y1="280" x2="828" y2="280" stroke="#b3660b" stroke-width="1.4" marker-end="url(#arrAmber)"></line>
+
+  <line x1="500" y1="318" x2="500" y2="343" stroke="#007a94" stroke-width="1.4" marker-end="url(#arrTeal)"></line>
+
+  <!-- Formula card -->
+  <rect x="210" y="344" width="580" height="126" rx="4" fill="#eaf6f8" stroke="#007a94" stroke-width="1.4"></rect>
+  <text x="500" y="366" text-anchor="middle" font-size="11" font-weight="700" fill="#007a94" font-family="ui-monospace, Menlo, Consolas, monospace">PRICING CURVE — Phase 7 direction (true exponential, not pump.fun's AMM)</text>
+  <text x="500" y="391" text-anchor="middle" font-size="13" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">price(supply) = basePrice × e^(k × totalTokensSold)</text>
+  <text x="500" y="412" text-anchor="middle" font-size="11" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">cost(amount) = ∫ price(s) ds = (basePrice⁄k) × [e^(k·(sold+amount)) − e^(k·sold)]</text>
+  <text x="500" y="435" text-anchor="middle" font-size="10" fill="#55665f" font-family="ui-sans-serif, Arial, sans-serif">early buyers pay less — price is a function of cumulative supply sold, not a pooled reserve ratio</text>
+  <text x="500" y="453" text-anchor="middle" font-size="9.5" fill="#55665f" font-family="ui-sans-serif, Arial, sans-serif">e^x has no exact int64 form → computed in float64, rounded to int64 base units only at the balance boundary</text>
+
+  <!-- Section C: concurrency guard -->
+  <text x="60" y="500" font-size="12" font-weight="700" fill="#b3660b" font-family="ui-monospace, Menlo, Consolas, monospace">CONCURRENCY GUARD — Phase 7 stretch goal</text>
+
+  <rect x="175" y="512" width="110" height="34" rx="3" fill="#ffffff" stroke="#10201d" stroke-width="1"></rect>
+  <text x="230" y="533" text-anchor="middle" font-size="10" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">goroutine 1</text>
+  <rect x="355" y="512" width="110" height="34" rx="3" fill="#ffffff" stroke="#10201d" stroke-width="1"></rect>
+  <text x="410" y="533" text-anchor="middle" font-size="10" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">goroutine 2</text>
+  <rect x="535" y="512" width="110" height="34" rx="3" fill="#ffffff" stroke="#10201d" stroke-width="1"></rect>
+  <text x="590" y="533" text-anchor="middle" font-size="10" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">goroutine 3</text>
+  <rect x="715" y="512" width="110" height="34" rx="3" fill="#ffffff" stroke="#10201d" stroke-width="1"></rect>
+  <text x="770" y="533" text-anchor="middle" font-size="10" fill="#10201d" font-family="ui-monospace, Menlo, Consolas, monospace">goroutine 4</text>
+
+  <line x1="230" y1="546" x2="230" y2="586" stroke="#55665f" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#arrInk)"></line>
+  <text x="230" y="565" text-anchor="middle" font-size="8.5" fill="#55665f" font-family="ui-sans-serif, Arial, sans-serif">waiting</text>
+
+  <line x1="410" y1="546" x2="410" y2="586" stroke="#b3660b" stroke-width="1.8" marker-end="url(#arrAmber)"></line>
+  <text x="410" y="565" text-anchor="middle" font-size="8.5" fill="#b3660b" font-family="ui-sans-serif, Arial, sans-serif">holds lock</text>
+
+  <line x1="590" y1="546" x2="590" y2="586" stroke="#55665f" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#arrInk)"></line>
+  <text x="590" y="565" text-anchor="middle" font-size="8.5" fill="#55665f" font-family="ui-sans-serif, Arial, sans-serif">waiting</text>
+
+  <line x1="770" y1="546" x2="770" y2="586" stroke="#55665f" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#arrInk)"></line>
+  <text x="770" y="565" text-anchor="middle" font-size="8.5" fill="#55665f" font-family="ui-sans-serif, Arial, sans-serif">waiting</text>
+
+  <rect x="140" y="588" width="720" height="80" rx="4" fill="#fdf3e7" stroke="#b3660b" stroke-width="1.6"></rect>
+  <rect x="158" y="606" width="14" height="11" rx="1.5" fill="none" stroke="#b3660b" stroke-width="1.4"></rect>
+  <path d="M161,606 v-5 a4,4 0 0 1 8,0 v5" fill="none" stroke="#b3660b" stroke-width="1.4"></path>
+  <text x="500" y="612" text-anchor="middle" font-size="11" fill="#b3660b" font-family="ui-monospace, Menlo, Consolas, monospace">mu.Lock()</text>
+  <text x="500" y="629" text-anchor="middle" font-size="10.5" fill="#b3660b" font-family="ui-monospace, Menlo, Consolas, monospace">price = f(sold)  ·  deduct + add  ·  totalTokensSold += amount</text>
+  <text x="500" y="646" text-anchor="middle" font-size="11" fill="#b3660b" font-family="ui-monospace, Menlo, Consolas, monospace">mu.Unlock()</text>
+  <text x="500" y="661" text-anchor="middle" font-size="9.5" fill="#55665f" font-family="ui-sans-serif, Arial, sans-serif">one goroutine inside at a time</text>
+
+  <text x="500" y="696" text-anchor="middle" font-size="10" fill="#55665f" font-family="ui-sans-serif, Arial, sans-serif">Without this gate, two concurrent Buy calls can read the same totalTokensSold before</text>
+  <text x="500" y="710" text-anchor="middle" font-size="10" fill="#55665f" font-family="ui-sans-serif, Arial, sans-serif">either writes it back — a lost update that silently corrupts balances.</text>
+
+  <line x1="60" y1="734" x2="940" y2="734" stroke="#e3e9e7" stroke-width="1"></line>
+  <text x="500" y="756" text-anchor="middle" font-size="9.5" fill="#8a9a94" font-family="ui-monospace, Menlo, Consolas, monospace">main.go — implementation (Phases 1–5, done)   ·   README.md — phase map &amp; design notes</text>
+</svg>

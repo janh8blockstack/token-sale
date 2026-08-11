@@ -178,6 +178,31 @@ func newUsersPresized(n int, startingBalance int64) []User { // phase-4
 	return users // phase-4
 } // phase-4
 
+// Phase 5: batch operations over a slice
+
+// buyAll attempts to buy amount tokens for every user in users, in place,
+// and reports one error per user instead of stopping at the first failure.
+//
+// Mechanism vs policy, the same split Buy itself already draws (main.go:87):
+// buyAll only performs the batch and hands back what happened to each user.
+// It doesn't print, doesn't skip, doesn't decide anything is fatal — that's
+// main's job below. A batch operation that also decided how to react to its
+// own failures couldn't be reused by a future CLI or test that wants to
+// react differently.
+//
+// []User, not []*User: a slice's backing array is already shared memory, so
+// users[i].Buy(...) inside the loop reaches the exact same User main holds —
+// no pointer slice is needed just for that. (A slice of pointers earns its
+// place once Phase 7's map needs identity that outlives its slot in a
+// slice.)
+func buyAll(users []User, amount int64) []error { // phase-5
+	results := make([]error, len(users)) // phase-5: one result slot per user, index-aligned with users
+	for i := range users {               // phase-5: index-only range — reaches users[i] directly, no copy in between
+		results[i] = users[i].Buy(amount) // phase-5: pointer receiver on the real element — a success here really mutates it
+	} // phase-5
+	return results // phase-5
+} // phase-5
+
 // main walks the checkpoints in order.
 func main() {
 	fmt.Printf("Token sale: price %s base units per token base unit, %d decimals\n",
@@ -241,5 +266,50 @@ func main() {
 		printSummary(u) // phase-4
 	} // phase-4
 
-	fmt.Println("\nPhases 1 to 4 complete. Phase 5 (everyone buys) is next.")
+	// Phase 5 checkpoint, part one: the range-copy trap, live, on Buy instead
+	// of fundByValue. Same underlying mechanism as Phase 3a, different method.
+	fmt.Println("\n== Phase 5a: the range-copy trap, on Buy this time ==") // phase-5
+	buyAmount := 30 * Unit                                                 // phase-5: var, not const — used again below with a different meaning if changed later
+	fmt.Printf("  before: %s tokens (users[0])\n", formatUnits(users[0].TokenBalance)) // phase-5
+	for _, u := range users { // phase-5: range copies each User into u — u is NOT users[i]
+		// u is addressable (it's a real local variable), so Go can take &u
+		// automatically for the pointer receiver. u.Buy(...) compiles and
+		// returns a nil error — it genuinely succeeds. It just succeeds
+		// against the copy. This is what makes the bug dangerous: nothing
+		// here looks wrong, not even the error return.
+		if err := u.Buy(buyAmount); err != nil { // phase-5: pointer receiver call on a copy — mutates the copy only
+			fmt.Printf("  %s: buy failed: %v\n", u.Name, err) // phase-5
+		}
+	} // phase-5
+	fmt.Printf("  after:  %s tokens (users[0])  <- unchanged, Buy ran on a copy\n", // phase-5
+		formatUnits(users[0].TokenBalance))
+
+	// Phase 5 checkpoint, part two: buyAll does the real, index-based buying
+	// (the mechanism); this loop only decides how to react to each result
+	// (the policy). Also sets up a genuine insufficient-funds case: drain
+	// users[2] for real before the uniform buy, so its later failure in the
+	// batch isn't a contrived error path.
+	fmt.Println("\n== Phase 5b: buyAll (mechanism) + a policy loop, and a buyer who can't afford it ==") // phase-5
+	if err := users[2].Buy(80 * Unit); err != nil {                                                     // phase-5: users[2] is the real element, no range involved
+		fmt.Printf("  setup buy failed: %v\n", err) // phase-5
+	}
+	results := buyAll(users, buyAmount) // phase-5: one call, one []error back — users is mutated in place by now
+	for i, err := range results {       // phase-5: ranging over []error, not []User — no copy-of-User trap here, there's no User in this slice
+		if err != nil {
+			// Skip and continue, not stop everything: one buyer's failure
+			// isn't the whole sale's problem, and Buy already validated
+			// before mutating, so a failed buyer is left untouched either
+			// way — nothing needs to be rolled back before moving on.
+			fmt.Printf("  %s: buy failed: %v\n", users[i].Name, err) // phase-5: users[i] still valid — same length, same order as results
+			continue                                                // phase-5: explicit — skips the success branch below for this i
+		}
+		fmt.Printf("  %s: bought %s tokens\n", users[i].Name, formatUnits(buyAmount)) // phase-5
+	} // phase-5
+
+	fmt.Println("\n== Phase 5 final summary ==") // phase-5
+	for i := range users {                        // phase-5: index again, purely for consistency with the loop above — a value range would read fine too
+		printSummary(users[i]) // phase-5: read-only call, same as the Phase 4 print loops
+	} // phase-5
+
+	fmt.Println("\nPhases 1 to 5 complete. Phase 6 (self review) is next.")
 }
