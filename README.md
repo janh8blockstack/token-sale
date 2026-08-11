@@ -251,6 +251,78 @@ Ours doesn't — a fixed max-supply cutoff would have to be an explicit rule
 sitting on top of the exponential curve, not something the curve itself
 produces.
 
+### Graduation, the blow-up point, and why our curve never hits zero
+
+Three terms from the section above, in plain language:
+
+**Graduation** is pump.fun's own name for the moment its curve ends: the
+exact point where `real_token_reserves` hits `0` — every token allocated to
+the curve has been bought. The token stops trading on the internal curve and
+moves to a real exchange (PumpSwap). It's "graduation" because the token is
+leaving that stage, the way a student leaves school.
+
+**A finite blow-up point** is the general math term for a specific, real,
+*reachable* input where a function's output shoots to infinity — not "if you
+could count all the way to infinity," but one exact number you can actually
+land on. For pump.fun, that number is whatever token amount makes
+`virtualToken` hit `0`. Price genuinely goes to infinity right there, because
+the formula divides by it.
+
+**Our curve never reaches 0, in the direction it actually runs.** `e^x` gets
+closer to `0` as `x` goes very negative, but never touches it — and since
+`supply` only ever counts upward from `0` in this project, we never go near
+that side of the curve at all. In the direction the sale actually moves,
+price only ever climbs:
+
+| supply sold | price |
+|---|---|
+| 0 | 1.00 |
+| 1 | 1.11 |
+| 2 | 1.22 |
+| 10 | 2.72 |
+
+No ceiling it slams into, no floor it approaches. That's the real contrast
+with pump.fun: theirs hits a wall (infinity) at one specific, real point
+(graduation); ours has no wall in either direction. If the sale should ever
+actually *stop*, that has to be an explicit rule we add (e.g. "stop after
+1,000,000 tokens") — the curve's own math won't produce a stopping point the
+way pump.fun's does.
+
+## Open questions
+
+Two different audiences for these — some are worth working out here in code,
+some are product calls nobody but the team can make.
+
+**Worth working out here, in code and conversation:**
+
+- What actually sets `basePrice` and `k`? `k` controls how aggressively price
+  ramps — picked badly, the curve is either flat and boring or absurd (1000×
+  after 50 buyers).
+- Does the `float64` → `int64` rounding at each buy's boundary accumulate
+  error over a long-running sale, the way repeated float addition drifts?
+- `sync.Mutex` blocks every caller equally. Would a read-only "current price"
+  endpoint want `sync.RWMutex` instead, so reads don't block on each other?
+- How do you actually test concurrent correctness beyond table-driven unit
+  tests? `go test -race`, and what it can and can't catch.
+- Is "whoever the mutex grants the lock to first" the same as "whoever
+  submitted first"? It isn't guaranteed to be — the same ordering question
+  that makes transaction ordering (MEV) contested on real blockchains.
+
+**Product calls — worth raising with whoever owns the roadmap:**
+
+- Does the sale need a stopping point, the way pump.fun has graduation? This
+  curve has none built in — someone has to decide whether it caps at a fixed
+  supply or runs forever.
+- Is `Sell` in scope, or is this buy-only? Every phase plan so far only
+  covers buying; a real bonding curve usually needs a symmetric sell.
+- What's the expected concurrency load — tens of buyers, or thousands? One
+  mutex is fine for the former, a bottleneck for the latter.
+- Should `minTokensOut` (the slippage guard) be required on every buy, or
+  optional?
+- Is this staying a simulation, or meant to become a real backend
+  eventually? That decides how much of the mutex/rounding/slippage work
+  needs to be airtight versus just understood.
+
 ## Sources
 
 - [pump.fun bonding curve docs](https://pump.fun/docs/bonding-curve)
