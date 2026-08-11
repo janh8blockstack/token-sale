@@ -137,7 +137,38 @@ above, just guarding against a moving price instead of an empty one.
 | 4 | slices and loops, `append` vs pre sized | done |
 | 5 | everyone buys, the `range` copy gotcha | done |
 | 6 | self review (`gofmt`, `go vet`) | reviewed — naming, receivers, tag consistency checked by hand; `gofmt`/`go vet` need a real Go toolchain to confirm |
-| 7 | maps, `Sale` state, interfaces, tests, flags, concurrency | later |
+| 7 | maps, `Sale` state, interfaces, tests, flags, concurrency | done — all six stretch goals built (`main.go:208-621`, `main_test.go`) |
+
+**Phase 7, at a glance:**
+
+- **Shared state + curve** — `Sale`, `price`, `curveCost`, `Sale.Buy`,
+  mutex-protected from the start.
+- **Concurrency** — `unsafeBuy` (the deliberately-broken sibling, no lock)
+  run by 1,000 goroutines against a shared `Sale`, then the same shape run
+  again through the real `Sale.Buy`. Same "broken demo, then fix" pattern as
+  `fundByValue` (3a) and the range-copy loop (5a).
+- **Maps** — `newUserMap` returns `map[string]*User`.
+- **Interfaces** — `Buyer` (one method), satisfied implicitly by `*User`,
+  deliberately not by `*Sale` (different signature — the type system
+  enforcing the same point already made in prose).
+- **CLI flags** — `-users`, `-balance`, `-price`, `-k`.
+- **Tests** — table-driven, `main_test.go`, covering `User.Buy` and
+  `Sale.Buy` including insufficient-funds.
+
+**Verified**, not just hand-traced: `go build`, `gofmt`, `go vet`, and
+`go test ./...` (all 7 cases) all pass clean on Go 1.26.5. `go run .` was
+executed live, and the concurrency checkpoint reproduced the actual bug on
+the first run — 1,000 goroutines racing `unsafeBuy` came back with
+`totalTokensSold` at `920.000000` against an expected `1000.000000` (80
+tokens' worth of buys silently lost to the missing lock); the same shape
+through the real, mutex-protected `Sale.Buy` came back exact at
+`1000.000000`. The one thing not verified here: `go run -race .`, for a
+fully deterministic (rather than got-lucky-on-this-run) proof of the data
+race — this environment has no C compiler, and `-race` requires `cgo`. Worth
+running yourself if you have `gcc`/`clang` available:
+```sh
+go build ./... && gofmt -l . && go vet ./... && go test ./... && go run -race .
+```
 
 ## Phase-by-phase: lines and concepts
 
@@ -218,6 +249,51 @@ being a property of the buyer and becomes a property of the market.
 `e^x` has no exact integer form, so the curve math needs `float64` internally,
 rounded to `int64` base units only at the boundary, right before it touches a
 stored balance — the one deliberate exception to the int64-only rule below.
+
+### Phase 7 — built (`main.go:208-621`, `main_test.go`)
+
+All six stretch goals, not a pick-1-2 subset. In build order:
+
+- **Shared state + the curve** (`main.go:208-320`) — `Sale`, `price`,
+  `curveCost`, `Sale.Buy`. Covered in detail above.
+- **Concurrency** (`main.go:322-351`, checkpoint `main.go:574-616`) —
+  `unsafeBuy` is `Sale.Buy` with `s.mu.Lock()` deliberately removed, the
+  Phase 7 sibling of `fundByValue` (Phase 3a) and the range-copy loop
+  (Phase 5a): broken on purpose, to watch the failure mode before the fix.
+  1,000 goroutines call it concurrently against one shared `Sale`; the
+  printed `totalTokensSold` may or may not visibly mismatch the expected
+  total on any given run (races are unreliable to observe by eye, on
+  purpose — that's the actual lesson) — `go run -race .` catches the data
+  race itself regardless of whether the numbers happen to match. The fixed
+  version immediately after (`main.go:600-616`) is identical except it
+  calls `Sale.Buy` instead. Concepts: `go` statement, `sync.WaitGroup`
+  (`Add` before spawning, never inside the goroutine; `defer Done()`;
+  `Wait()`), closures capturing a range variable (safe here specifically
+  because Go 1.22+ — this module targets 1.26.5 — gives each iteration its
+  own variable; pre-1.22 this exact code would have been a second, different
+  bug), and why `Sale` is deliberately never copied anywhere (a
+  `sync.Mutex` field makes a struct unsafe to pass by value — `go vet`
+  catches this).
+- **Maps** (`main.go:355-373`) — `newUserMap` builds `map[string]*User`.
+  Pointers, not values: a map value isn't addressable in Go, so there's no
+  way to call a pointer-receiver method on an indexed map value directly
+  the way `users[i]` works for a slice — storing `*User` sidesteps that.
+- **Interfaces** (`main.go:377-399`, checkpoint `main.go:561-572`) —
+  `Buyer` has one method, `Buy(int64) error`. `*User` satisfies it
+  implicitly (no `implements` keyword in Go); `*Sale` does not, since
+  `Sale.Buy`'s signature takes an extra `*User` parameter — the type system
+  enforcing the same "price is a market property, not a buyer property"
+  point made in prose above.
+- **CLI flags** (`main.go:414-419`) — `-users`, `-balance` (whole tokens,
+  converted to base units after parsing), `-price`, `-k`. `basePrice` and
+  `curveK` moved from `const` to `var` to become flag targets — the exact
+  change the Phase 1 comment (`main.go:26-27`) predicted, just for the
+  curve's constants instead of `numUsers`/`startingBalance`.
+- **Tests** (`main_test.go`) — table-driven tests for `User.Buy` and
+  `Sale.Buy`, including the insufficient-funds case, run with
+  `go test ./...`. These test single-call correctness, not the race — the
+  race is a runtime checkpoint (above), not a unit test, since asserting on
+  non-deterministic timing in a table-driven test would be its own bug.
 
 ### Exponential vs. hyperbolic, precisely
 
@@ -302,6 +378,44 @@ actually *stop*, that has to be an explicit rule we add (e.g. "stop after
 1,000,000 tokens") — the curve's own math won't produce a stopping point the
 way pump.fun's does.
 
+### If we ever cap supply
+
+Not decided yet (see Open questions below) — but here's exactly what would
+and wouldn't change if a `maxSupply` were added.
+
+**The pricing formula doesn't change.** `price = basePrice × e^(k ×
+totalTokensSold)` keeps computing the same smooth, climbing number all the
+way up to and including the last token. At `totalTokensSold = maxSupply`,
+price is just an ordinary finite value — nothing dramatic happens to the
+curve itself. The cap would live entirely in a separate check, outside the
+formula; the formula would never know the cap exists, and removing the cap
+later wouldn't change a single price the curve produces.
+
+**One new check, same shape as the existing ones.** Before a buy proceeds:
+"would this push `totalTokensSold` past `maxSupply`? If so, reject." Same
+validate-before-mutate pattern as `ErrInsufficientFunds` — a new
+`ErrSupplyExceeded`, checked before anything mutates.
+
+**The practical result is a fence, not a wall pump.fun's math builds for
+free.** Price climbs smoothly right up to the cap, then the very next buy
+is flatly refused — a sudden, deliberate stop, not a smooth ramp toward
+infinity. pump.fun's graduation also migrates the leftover liquidity to a
+real exchange automatically; a plain supply cap here wouldn't do that on
+its own — that would be a separate feature.
+
+**Two different "supplies," easy to conflate.** `totalTokensSold` only ever
+counts up from `0` — it never hits `0` again (no `Sell` yet). But adding a
+cap introduces a second, new quantity: `maxSupply − totalTokensSold`, tokens
+*remaining*. That one **does** hit `0` once the cap is reached — that's the
+whole mechanism of a cap. The key difference from pump.fun: that "remaining
+hits 0" event is pure bookkeeping and never touches price. In pump.fun,
+reserve depletion and price behavior are the *same* mechanism — the reserve
+sits directly inside the price formula. Here they'd be two disconnected
+things sitting side by side: one counter reaching zero and flipping a gate
+shut, one curve that never notices. Price wouldn't spike or approach
+infinity; it would just stop being purchasable at whatever ordinary number
+it happened to be at.
+
 ## Open questions
 
 Two different audiences for these — some are worth working out here in code,
@@ -309,15 +423,22 @@ some are product calls nobody but the team can make.
 
 **Worth working out here, in code and conversation:**
 
-- What actually sets `basePrice` and `k`? `k` controls how aggressively price
-  ramps — picked badly, the curve is either flat and boring or absurd (1000×
-  after 50 buyers).
+- ~~What actually sets `basePrice` and `k`?~~ Resolved: `basePrice = 1.0`
+  (matches Phase 1-6's flat price, so the curve starts where they left off)
+  and `curveK = 0.001 / Unit` (`main.go:224-227`) — a 0.1%-per-whole-token
+  ramp, scaled down since `totalTokensSold` is tracked in base units. Worth
+  revisiting once real usage shows whether that ramp feels right.
 - Does the `float64` → `int64` rounding at each buy's boundary accumulate
   error over a long-running sale, the way repeated float addition drifts?
 - `sync.Mutex` blocks every caller equally. Would a read-only "current price"
   endpoint want `sync.RWMutex` instead, so reads don't block on each other?
-- How do you actually test concurrent correctness beyond table-driven unit
-  tests? `go test -race`, and what it can and can't catch.
+- ~~How do you actually test concurrent correctness beyond table-driven unit
+  tests?~~ Table-driven tests for `User.Buy` and `Sale.Buy` now exist
+  (`main_test.go`), but they test single-goroutine correctness, not the
+  race itself — that's what `main.go:577-598`'s Phase 7c checkpoint does at
+  runtime, not `go test`. Still open: run `go test -race ./...` for a
+  deterministic race check, since the checkpoint's printed numbers alone
+  are, by design, not reliable proof either way.
 - Is "whoever the mutex grants the lock to first" the same as "whoever
   submitted first"? It isn't guaranteed to be — the same ordering question
   that makes transaction ordering (MEV) contested on real blockchains.
@@ -336,6 +457,31 @@ some are product calls nobody but the team can make.
 - Is this staying a simulation, or meant to become a real backend
   eventually? That decides how much of the mutex/rounding/slippage work
   needs to be airtight versus just understood.
+
+## After Phase 7: Go crypto
+
+Parked until all of Phase 7 is done — two ideas that fit this project
+specifically, not generic "add some crypto" filler.
+
+**1. `crypto/ed25519` as real `User` identity.** Solana signs everything
+with ed25519, and it's been in Go's stdlib since 1.13 — zero third-party
+dependencies. Each `User` would get a keypair; `Buy` would require a signed
+request, verified against the user's public key, before executing. The
+recommended one: it's thematically exact (same algorithm the real chain
+uses), small to add, and teaches signature verification as a concept
+genuinely separate from the mutex work — a signed request can't be forged
+even under concurrent access, though it doesn't replace the mutex (that's
+still about ordering, not authenticity).
+
+**2. `crypto/sha256` as a hash-chained receipt log.** Each successful `Buy`
+appends a small record — `hash(prevHash + user + amount + totalTokensSold)`
+— to an audit slice. Cheap (a handful of lines), and it's the same idea a
+real chain uses to make transaction history tamper-evident.
+
+**Steer away from:** `crypto/rand` for ordinary simulation randomness (e.g.
+randomizing goroutine start order for a demo) — that package is for actual
+secrets and is overkill there. `math/rand/v2` is the right, idiomatic tool
+for anything that isn't security-sensitive.
 
 ## Sources
 

@@ -3,8 +3,11 @@
 package main
 
 import (
-	"errors"
-	"fmt"
+	"errors" // phase-3
+	"flag"   // phase-7: CLI flags for numUsers, startingBalance, and the curve
+	"fmt"    // phase-1
+	"math"   // phase-7: math.Exp for the curve, math.Ceil for round-up-on-cost
+	"sync"   // phase-7: sync.Mutex guards Sale's shared state
 )
 
 // Phase 1: variables and constants
@@ -203,8 +206,218 @@ func buyAll(users []User, amount int64) []error { // phase-5
 	return results // phase-5
 } // phase-5
 
+// Phase 7: shared market state and the exponential pricing curve
+
+// basePrice and curveK define the curve: price(supply) = basePrice ×
+// e^(curveK × supply). basePrice matches Phase 1-6's flat PriceBaseUnits,
+// so the curve starts at exactly the same price the flat phases used.
+//
+// curveK is expressed per BASE UNIT, not per whole token, because
+// totalTokensSold below is tracked in base units — the same reason Unit
+// exists at all (main.go:15). 0.001 "per whole token" scaled down by Unit
+// keeps the exponent sane at realistic totalTokensSold values instead of
+// exploding; using 0.001 directly against a base-unit count would blow the
+// curve up almost immediately.
+//
+// var, not const, unlike PriceBaseUnits (main.go:18-19) — this is exactly
+// the CLI-flags stretch goal the Phase 1 comment predicted (main.go:25-26).
+// flag needs an addressable variable to write into, which a const can never
+// be. The values below are only the defaults; main() may overwrite them via
+// -price and -k before any checkpoint reads them.
+var ( // phase-7
+	basePrice = float64(PriceBaseUnits) // phase-7: default 1.0 — same starting price the flat phases used
+	curveK    = 0.001 / float64(Unit)   // phase-7: default — 0.1% per whole token, scaled to base units
+) // phase-7
+
+// price returns the current price for the next base unit of token, given
+// how many base units have sold so far. This is the project's own curve —
+// exponential, not pump.fun's constant-product formula. See README.md
+// "Where the curve goes" and "Exponential vs. hyperbolic, precisely" for
+// why those are different shapes, not the same shape with different
+// constants.
+func price(totalTokensSold int64) float64 { // phase-7
+	return basePrice * math.Exp(curveK*float64(totalTokensSold)) // phase-7
+} // phase-7
+
+// curveCost returns the total price to buy tokenAmount base units, starting
+// from totalTokensSold already sold — the INTEGRAL of price over that
+// range, not price(totalTokensSold)*tokenAmount. Price moves while an
+// order fills; charging the spot price at the start would undercharge
+// every buy bigger than an infinitesimal one.
+//
+// Named curveCost, not cost: User.Buy already has a local variable named
+// cost (main.go:96) for a different, simpler meaning (tokenAmount times a
+// flat price). Same word, two meanings, in the same file — reusing it here
+// would shadow-not-conflict (Go allows it) but reads as a mistake on sight.
+//
+// e^x has no exact int64 form, so this computes in float64. The caller
+// (Sale.Buy) rounds to int64 base units at the boundary, right before a
+// balance is touched — the one deliberate exception to the int64-only
+// money rule (main.go:36-39), same exception README.md documents.
+func curveCost(totalTokensSold, tokenAmount int64) float64 { // phase-7
+	sold := float64(totalTokensSold) // phase-7
+	amount := float64(tokenAmount)   // phase-7
+	// (basePrice/curveK) × (e^(k(sold+amount)) − e^(k·sold)) — the closed
+	// form of ∫ price(s) ds from sold to sold+amount.
+	return (basePrice / curveK) * (math.Exp(curveK*(sold+amount)) - math.Exp(curveK*sold)) // phase-7
+} // phase-7
+
+// Sale holds state shared by every buyer — the thing Phases 1-6 never
+// needed, since price used to be a fixed constant nobody had to share. A
+// curve isn't a price, it's market state: how many tokens have sold so
+// far, which every buyer's price now depends on.
+//
+// Fields unexported, unlike User's: nothing outside this file constructs a
+// Sale from a literal or needs %+v on it (main.go:41-43 is why User's are
+// exported; that reasoning doesn't apply here).
+type Sale struct { // phase-7
+	totalTokensSold int64      // phase-7: base units sold so far, across every buyer
+	mu              sync.Mutex // phase-7: guards totalTokensSold and the balance mutation together, see Buy
+} // phase-7
+
+// Buy purchases tokenAmount base units of token for u, priced off the
+// curve's current state instead of a fixed constant. This is why Buy moved
+// from *User to *Sale (README.md: "the price stops being a property of the
+// buyer and becomes a property of the market") — pricing needs
+// totalTokensSold, and only Sale has one.
+//
+// Pointer receiver on *Sale for the same reason *User's methods needed one
+// (main.go:59-60): Lock, the balance mutation, and totalTokensSold's
+// update all have to land on the real shared Sale, not a copy.
+func (s *Sale) Buy(u *User, tokenAmount int64) error { // phase-7
+	if tokenAmount <= 0 { // phase-7
+		return fmt.Errorf("buy %s: %w", formatUnits(tokenAmount), ErrInvalidAmount) // phase-7
+	} // phase-7
+
+	// Locked from here through the mutation at the bottom: totalTokensSold
+	// is read to price this buy, then written to record it, and no other
+	// goroutine's Buy can interleave between those two steps while the
+	// lock is held. Phase 5's buyAll got this for free from being a plain
+	// sequential loop; this is what recreates the same guarantee once
+	// callers can be concurrent goroutines instead (the concurrency
+	// stretch goal, still to come).
+	s.mu.Lock()         // phase-7
+	defer s.mu.Unlock() // phase-7
+
+	rawCost := curveCost(s.totalTokensSold, tokenAmount) // phase-7
+	// Round up: the protocol's favour, never the buyer's — the rounding
+	// direction rule the flat-price phases never needed but the curve does
+	// (README.md "Design decisions worth knowing").
+	costInBaseUnits := int64(math.Ceil(rawCost)) // phase-7
+
+	if costInBaseUnits > u.BaseBalance { // phase-7
+		return fmt.Errorf("buy %s tokens: costs %s, balance is %s: %w", // phase-7
+			formatUnits(tokenAmount), formatUnits(costInBaseUnits), formatUnits(u.BaseBalance),
+			ErrInsufficientFunds)
+	} // phase-7
+
+	// Same validate-before-mutate discipline as User.Buy (main.go:102-104):
+	// a rejected buy leaves both u and s untouched, byte for byte.
+	u.BaseBalance -= costInBaseUnits // phase-7
+	u.TokenBalance += tokenAmount    // phase-7
+	s.totalTokensSold += tokenAmount // phase-7
+	return nil                       // phase-7
+} // phase-7
+
+// unsafeBuy is Sale.Buy's exact logic with the lock deliberately removed —
+// the Phase 7 sibling of fundByValue (Phase 3a) and the range-copy loop
+// (Phase 5a): broken on purpose, kept only to demonstrate the failure mode
+// live before the fix. Never called outside the Phase 7b checkpoint.
+func (s *Sale) unsafeBuy(u *User, tokenAmount int64) error { // phase-7
+	if tokenAmount <= 0 { // phase-7
+		return fmt.Errorf("buy %s: %w", formatUnits(tokenAmount), ErrInvalidAmount) // phase-7
+	} // phase-7
+
+	// No s.mu.Lock() here. That's the entire point.
+	rawCost := curveCost(s.totalTokensSold, tokenAmount) // phase-7
+	costInBaseUnits := int64(math.Ceil(rawCost))         // phase-7
+
+	if costInBaseUnits > u.BaseBalance { // phase-7
+		return fmt.Errorf("buy %s tokens: costs %s, balance is %s: %w", // phase-7
+			formatUnits(tokenAmount), formatUnits(costInBaseUnits), formatUnits(u.BaseBalance),
+			ErrInsufficientFunds)
+	} // phase-7
+
+	u.BaseBalance -= costInBaseUnits // phase-7: safe — each goroutine touches a different u, no shared memory here
+	u.TokenBalance += tokenAmount    // phase-7: same — private to this u
+	// The race: read s.totalTokensSold, add to it, write it back — three
+	// separate machine steps, not one atomic operation. Two goroutines can
+	// both read the same value here before either writes, and one
+	// goroutine's update silently overwrites the other's. This is the only
+	// line in the function actually touching memory shared across
+	// goroutines, and it's exactly the line missing Sale.Buy's lock.
+	s.totalTokensSold += tokenAmount // phase-7
+	return nil                       // phase-7
+} // phase-7
+
+// Phase 7: maps
+
+// newUserMap builds n users keyed by name, holding pointers.
+//
+// map[string]*User, not map[string]User: a map value isn't addressable in
+// Go — there's no &m["key"], and no way to call a pointer-receiver method
+// through an indexed map value directly, the way users[i] works for a
+// slice. Storing *User sidesteps that entirely: looking a user up by name
+// always hands back the one real User, ready for Sale.Buy's pointer
+// receiver, with no copy anywhere in the path.
+func newUserMap(n int, startingBalance int64) map[string]*User { // phase-7
+	users := make(map[string]*User, n) // phase-7: n here is a capacity hint, not a length — maps have no make([]T, n)-style "n zero elements" form
+	for i := range n {                 // phase-7
+		name := fmt.Sprintf("user%02d", i+1) // phase-7
+		users[name] = &User{                 // phase-7: &User{...} takes the address of a freshly allocated User — escapes to the heap, outlives this function call
+			Name:        name,            // phase-7
+			BaseBalance: startingBalance, // phase-7
+		} // phase-7
+	} // phase-7
+	return users // phase-7
+} // phase-7
+
+// Phase 7: interfaces
+
+// Buyer is the smallest interface that captures "can attempt a purchase."
+// Only *User satisfies it here — Sale.Buy takes an extra *User parameter, a
+// different method signature, so Sale does NOT satisfy Buyer. That's not an
+// oversight: main.go:270-274 already makes this point in prose, and this is
+// the same fact showing up in the type system — pricing stopped being
+// something a buyer carries around, so Sale's Buy couldn't keep User.Buy's
+// shape even if it wanted to.
+//
+// Doesn't buy much with exactly one implementer — the payoff shows up once
+// something needs to accept "anything buyable" without caring which
+// concrete type it is. Left small on purpose, per the brief.
+type Buyer interface { // phase-7
+	Buy(tokenAmount int64) error // phase-7
+} // phase-7
+
+// attemptPurchase takes a Buyer, not specifically a *User — proof the
+// interface does real work rather than just decorating the code. Any future
+// type with a matching Buy(int64) error method satisfies Buyer automatically
+// (Go interfaces are implicit, no "implements" declaration needed), and this
+// function wouldn't need to change to accept it.
+func attemptPurchase(b Buyer, tokenAmount int64) error { // phase-7
+	return b.Buy(tokenAmount) // phase-7
+} // phase-7
+
+// startingBalanceTokens is the flag target for -balance, in WHOLE tokens —
+// friendlier on a command line than typing a base-unit count. startingBalance
+// itself (base units) is still computed from this × Unit after flag.Parse(),
+// same "derive from Unit, never type out the literal" rule Phase 1 used
+// (main.go:26-27).
+var startingBalanceTokens = int64(100) // phase-7
+
 // main walks the checkpoints in order.
 func main() {
+	// Phase 7: CLI flags. Must run before anything below reads numUsers,
+	// startingBalance, basePrice, or curveK — command-line values only land
+	// in these variables once Parse actually executes; the third argument
+	// to each call below is only the default shown in -h, not a live value.
+	flag.IntVar(&numUsers, "users", numUsers, "number of simulated users")                                                // phase-7
+	flag.Int64Var(&startingBalanceTokens, "balance", startingBalanceTokens, "starting balance per user, in whole tokens") // phase-7
+	flag.Float64Var(&basePrice, "price", basePrice, "curve base price (Phase 7+ checkpoints only)")                       // phase-7
+	flag.Float64Var(&curveK, "k", curveK, "curve growth rate per base unit (Phase 7+ checkpoints only)")                  // phase-7
+	flag.Parse()                                                                                                          // phase-7
+	startingBalance = startingBalanceTokens * Unit                                                                        // phase-7: recomputed from the (possibly flag-overridden) whole-token value
+
 	fmt.Printf("Token sale: price %s base units per token base unit, %d decimals\n",
 		formatUnits(PriceBaseUnits*Unit), Decimals)
 
@@ -268,10 +481,10 @@ func main() {
 
 	// Phase 5 checkpoint, part one: the range-copy trap, live, on Buy instead
 	// of fundByValue. Same underlying mechanism as Phase 3a, different method.
-	fmt.Println("\n== Phase 5a: the range-copy trap, on Buy this time ==") // phase-5
-	buyAmount := 30 * Unit                                                 // phase-5: var, not const — used again below with a different meaning if changed later
+	fmt.Println("\n== Phase 5a: the range-copy trap, on Buy this time ==")             // phase-5
+	buyAmount := 30 * Unit                                                             // phase-5: var, not const — used again below with a different meaning if changed later
 	fmt.Printf("  before: %s tokens (users[0])\n", formatUnits(users[0].TokenBalance)) // phase-5
-	for _, u := range users { // phase-5: range copies each User into u — u is NOT users[i]
+	for _, u := range users {                                                          // phase-5: range copies each User into u — u is NOT users[i]
 		// u is addressable (it's a real local variable), so Go can take &u
 		// automatically for the pointer receiver. u.Buy(...) compiles and
 		// returns a nil error — it genuinely succeeds. It just succeeds
@@ -290,7 +503,7 @@ func main() {
 	// users[2] for real before the uniform buy, so its later failure in the
 	// batch isn't a contrived error path.
 	fmt.Println("\n== Phase 5b: buyAll (mechanism) + a policy loop, and a buyer who can't afford it ==") // phase-5
-	if err := users[2].Buy(80 * Unit); err != nil { // phase-5: users[2] is the real element, no range involved
+	if err := users[2].Buy(80 * Unit); err != nil {                                                      // phase-5: users[2] is the real element, no range involved
 		fmt.Printf("  setup buy failed: %v\n", err) // phase-5
 	} // phase-5
 	results := buyAll(users, buyAmount) // phase-5: one call, one []error back — users is mutated in place by now
@@ -301,15 +514,108 @@ func main() {
 			// before mutating, so a failed buyer is left untouched either
 			// way — nothing needs to be rolled back before moving on.
 			fmt.Printf("  %s: buy failed: %v\n", users[i].Name, err) // phase-5: users[i] still valid — same length, same order as results
-			continue                                                // phase-5: explicit — skips the success branch below for this i
+			continue                                                 // phase-5: explicit — skips the success branch below for this i
 		} // phase-5
 		fmt.Printf("  %s: bought %s tokens\n", users[i].Name, formatUnits(buyAmount)) // phase-5
 	} // phase-5
 
 	fmt.Println("\n== Phase 5 final summary ==") // phase-5
-	for i := range users {                        // phase-5: index again, purely for consistency with the loop above — a value range would read fine too
+	for i := range users {                       // phase-5: index again, purely for consistency with the loop above — a value range would read fine too
 		printSummary(users[i]) // phase-5: read-only call, same as the Phase 4 print loops
 	} // phase-5
 
-	fmt.Println("\nPhases 1 to 5 complete. Phase 6 (self review) is next.")
+	// Phase 7 checkpoint, part one: Sale + the exponential curve, still
+	// sequential (concurrency is the next slice of Phase 7, not this one).
+	// Fresh users and a fresh Sale, so this demo isn't reading balances the
+	// earlier phases already changed. Same fixed buyAmount as Phase 5, but
+	// unlike buyAll — where every buyer priced independently off the flat
+	// PriceBaseUnits — every buy here reads and moves the same
+	// sale.totalTokensSold, so price visibly climbs from one buyer to the
+	// next.
+	fmt.Println("\n== Phase 7a: Sale + the exponential curve ==") // phase-7
+	curveUsers := newUsers(4, startingBalance)                    // phase-7
+	var sale Sale                                                 // phase-7: zero value is ready to use — totalTokensSold 0, mu unlocked, no constructor needed
+	for i := range curveUsers {                                   // phase-7: index-only range — same range-copy lesson from Phase 5 still applies
+		// price() here is just for display, read before the buy moves
+		// totalTokensSold — Buy recomputes the same thing internally under
+		// its own lock, this call isn't racing anything.
+		quoted := price(sale.totalTokensSold) // phase-7
+		// sale.Buy(...): sale is the one real local variable from `var sale
+		// Sale` above, not a range copy, so Go's auto-&sale for the pointer
+		// receiver lands on the actual Sale — the Phase 3b/alice case, not
+		// the Phase 3a/5a copy trap. &curveUsers[i]: Sale.Buy takes *User,
+		// and curveUsers[i] is the real element (indexed, not
+		// ranged-by-value) — same addressing rule buyAll relied on in
+		// Phase 5.
+		if err := sale.Buy(&curveUsers[i], buyAmount); err != nil { // phase-7
+			fmt.Printf("  %s: buy failed: %v\n", curveUsers[i].Name, err) // phase-7
+			continue                                                      // phase-7
+		} // phase-7
+		// quoted is a price RATIO (cost per token, both already in base
+		// units), not itself a quantity of base units — formatUnits would
+		// wrongly divide it by Unit again, so it's printed directly instead.
+		fmt.Printf("  %s: price was %.6f, bought %s tokens, sold so far: %s\n", // phase-7
+			curveUsers[i].Name, quoted, formatUnits(buyAmount), formatUnits(sale.totalTokensSold))
+	} // phase-7
+
+	// Phase 7 checkpoint, part two: Buyer, the interface. &curveUsers[0]
+	// satisfies Buyer because *User has a matching Buy(int64) error method
+	// — nothing declares that on purpose, Go interfaces are implicit.
+	// attemptPurchase never mentions User by name, only Buyer.
+	fmt.Println("\n== Phase 7b: Buyer, the interface ==") // phase-7
+	var b Buyer = &curveUsers[0]                          // phase-7: compiles only because *User's method set includes Buy(int64) error
+	if err := attemptPurchase(b, buyAmount); err != nil { // phase-7
+		fmt.Printf("  %s: buy failed: %v\n", curveUsers[0].Name, err) // phase-7
+	} else { // phase-7
+		fmt.Printf("  %s bought through attemptPurchase(Buyer, ...), no *User in that function's signature\n", // phase-7
+			curveUsers[0].Name)
+	} // phase-7
+
+	// Phase 7 checkpoint, part three: the race, live. newUserMap for the
+	// maps stretch goal, doubling as the buyer pool every goroutine below
+	// draws from.
+	fmt.Println("\n== Phase 7c: the race, live (no lock) ==") // phase-7
+	raceUsers := newUserMap(1000, startingBalance)            // phase-7: map[string]*User — enough concurrent goroutines to make the race reliably visible
+	raceAmount := 1 * Unit                                    // phase-7
+	var unsafeSale Sale                                       // phase-7
+	var wg sync.WaitGroup                                     // phase-7
+	for _, u := range raceUsers {                             // phase-7: range over a map — u is already *User, no copy-of-User trap possible here
+		wg.Add(1)   // phase-7: Add before the goroutine starts, never inside it — Add itself isn't safe to race against Wait
+		go func() { // phase-7: closes over u directly — safe because go.mod targets 1.26.5, and Go 1.22+ gives every range iteration its own u. Before 1.22 this closure would have shared one mutating u across all goroutines, mostly seeing the last iteration's value by the time they ran.
+			defer wg.Done()                         // phase-7
+			_ = unsafeSale.unsafeBuy(u, raceAmount) // phase-7: error deliberately discarded — concurrent prints would interleave into noise; the totals below are the actual point
+		}() // phase-7
+	} // phase-7
+	wg.Wait()                                                                               // phase-7: blocks until every goroutine above has called Done — nothing after this line races with the goroutines
+	expected := int64(len(raceUsers)) * raceAmount                                          // phase-7
+	fmt.Printf("  expected totalTokensSold: %s\n", formatUnits(expected))                   // phase-7
+	fmt.Printf("  actual   totalTokensSold: %s\n", formatUnits(unsafeSale.totalTokensSold)) // phase-7
+	if unsafeSale.totalTokensSold != expected {                                             // phase-7
+		fmt.Println("  mismatch — lost updates from the missing lock.") // phase-7
+	} else { // phase-7
+		fmt.Println("  numbers matched this run anyway — races are exactly this unreliable to observe by eye.") // phase-7
+	} // phase-7
+	fmt.Println("  `go run -race .` catches the data race itself, deterministically, even on a run where the numbers happen to match.") // phase-7
+
+	// Phase 7 checkpoint, part four: same shape, Sale.Buy this time —
+	// mutex-protected. Only the method name differs from Phase 7c.
+	fmt.Println("\n== Phase 7d: same race, Sale.Buy this time (locked) ==") // phase-7
+	safeUsers := newUserMap(1000, startingBalance)                          // phase-7
+	var safeSale Sale                                                       // phase-7
+	var wg2 sync.WaitGroup                                                  // phase-7
+	for _, u := range safeUsers {                                           // phase-7
+		wg2.Add(1)  // phase-7
+		go func() { // phase-7
+			defer wg2.Done()                // phase-7
+			_ = safeSale.Buy(u, raceAmount) // phase-7: identical call shape to unsafeBuy above — Lock()/Unlock() inside is the only difference
+		}() // phase-7
+	} // phase-7
+	wg2.Wait()                                                                          // phase-7
+	fmt.Printf("  expected totalTokensSold: %s\n", formatUnits(expected))               // phase-7
+	fmt.Printf("  actual   totalTokensSold: %s   <- always matches, lock or no luck\n", // phase-7
+		formatUnits(safeSale.totalTokensSold))
+
+	fmt.Println("\nPhases 1 to 7 complete: shared state, the exponential curve, maps, interfaces,")
+	fmt.Println("CLI flags, and the concurrency race + fix are all built. See main_test.go for the")
+	fmt.Println("table-driven tests (run with `go test ./...`, not part of this program's own output).")
 }
