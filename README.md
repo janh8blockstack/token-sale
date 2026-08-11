@@ -20,6 +20,20 @@ The starting assumption was "exponential bonding curve". That's not what pump.fu
 uses. This section is background on pump.fun's real mechanism, not a description
 of what this project builds — see "Where the curve goes" below for that.
 
+**Short answer: hyperbolic, not exponential.** `price = virtualSol /
+virtualToken` is a ratio (from the invariant `virtualToken × virtualSol = k`),
+which is a hyperbola's shape — not a constant raised to a power of supply,
+which is what "exponential" actually means. It only *looks* exponential on a
+chart, especially near graduation.
+
+**"Hybrid" and "hyperbolic" answer different questions.** If you've seen
+pump.fun described as a "hybrid bonding curve" elsewhere, that's describing
+the *launch mechanism* — trade on the internal virtual-reserve curve, then
+migrate to a real AMM pool at graduation, a two-stage lifecycle — not the
+pricing formula itself. The formula used during stage one is the hyperbolic
+one above; "hybrid" and "hyperbolic" aren't competing answers to the same
+question.
+
 pump.fun runs a constant product AMM (Uniswap V2, `x·y = k`) over *virtual* reserves:
 
 | | value |
