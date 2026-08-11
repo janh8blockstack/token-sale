@@ -155,20 +155,22 @@ above, just guarding against a moving price instead of an empty one.
 - **Tests** — table-driven, `main_test.go`, covering `User.Buy` and
   `Sale.Buy` including insufficient-funds.
 
-**Verified**, not just hand-traced: `go build`, `gofmt`, `go vet`, and
-`go test ./...` (all 7 cases) all pass clean on Go 1.26.5. `go run .` was
-executed live, and the concurrency checkpoint reproduced the actual bug on
-the first run — 1,000 goroutines racing `unsafeBuy` came back with
-`totalTokensSold` at `920.000000` against an expected `1000.000000` (80
-tokens' worth of buys silently lost to the missing lock); the same shape
-through the real, mutex-protected `Sale.Buy` came back exact at
-`1000.000000`. The one thing not verified here: `go run -race .`, for a
-fully deterministic (rather than got-lucky-on-this-run) proof of the data
-race — this environment has no C compiler, and `-race` requires `cgo`. Worth
-running yourself if you have `gcc`/`clang` available:
-```sh
-go build ./... && gofmt -l . && go vet ./... && go test ./... && go run -race .
-```
+**Fully verified**, not just hand-traced: `go build`, `gofmt`, `go vet`, and
+`go test ./...` (all 7 cases) pass clean on Go 1.26.5. `go run .` was
+executed live, and the concurrency checkpoint reproduced the actual bug —
+1,000 goroutines racing `unsafeBuy` came back with `totalTokensSold` short
+of the expected `1000.000000` (920 on one run, 719 on another — the exact
+shortfall varies run to run, which is itself the lesson: races are
+unreliable to observe by eye); the same shape through the real,
+mutex-protected `Sale.Buy` landed on exact `1000.000000` every time.
+
+`go run -race .` was also run, with a real C compiler (`gcc` installed for
+this): it caught **3 data races, deterministically**, both flagged lines
+exactly matching the ones documented in the code —
+`main.go:332` (the read inside `curveCost`) and `main.go:349`
+(`s.totalTokensSold += tokenAmount`), both inside `unsafeBuy`. The Phase 7d
+section of that same run — the locked version — produced zero race
+warnings. This is as verified as this project gets without a CI pipeline.
 
 ## Phase-by-phase: lines and concepts
 
