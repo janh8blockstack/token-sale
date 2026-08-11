@@ -205,6 +205,52 @@ being a property of the buyer and becomes a property of the market.
 rounded to `int64` base units only at the boundary, right before it touches a
 stored balance — the one deliberate exception to the int64-only rule below.
 
+### Exponential vs. hyperbolic, precisely
+
+The test that actually separates the two families: does the growth rate stay
+a constant multiple of the current value, or does it blow up at one specific
+finite point?
+
+**Ours — exponential, by definition.**
+
+```
+price(supply) = basePrice × e^(k × supply)
+```
+
+Bump `supply` up by 1 and price gets multiplied by the same factor `e^k`, no
+matter what `supply` currently is:
+
+```
+price(supply+1) / price(supply) = e^(k×(supply+1)) / e^(k×supply) = e^k    ← constant, always
+```
+
+That constant-ratio-per-step property is the actual definition of
+exponential growth. Crucially, this curve has no finite blow-up point — as
+`supply → ∞`, price grows without bound, but there's no specific supply
+value where it suddenly shoots to infinity. It just keeps compounding
+forever.
+
+**pump.fun's — a rational function, hyperbolic.**
+
+```
+price = virtualSol / virtualToken
+```
+
+`virtualToken` shrinks as tokens get bought, so price is really
+`k / virtualToken²` (from the invariant `virtualSol × virtualToken = k`) — an
+inverse-power relationship in the remaining reserve, not a base raised to
+the supply. The tell: this curve has a hard, finite vertical asymptote — the
+exact point where `real_token_reserves` hits `0`. That asymptote *is*
+graduation, mathematically. It's not a rule bolted onto the curve; it falls
+straight out of the formula's shape (`1/x` blowing up as `x → 0`), the same
+shape "Why it looks exponential" above describes.
+
+So the practical difference, if either curve ever needed a "sale ends here"
+rule: pump.fun's math gives you graduation for free, baked into the formula.
+Ours doesn't — a fixed max-supply cutoff would have to be an explicit rule
+sitting on top of the exponential curve, not something the curve itself
+produces.
+
 ## Sources
 
 - [pump.fun bonding curve docs](https://pump.fun/docs/bonding-curve)
