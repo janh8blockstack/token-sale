@@ -1,10 +1,50 @@
 # token sale
 
-A token sale simulation in Go, built phase by phase. **Phases 1 to 4 are done.**
+A token sale simulation in Go, built phase by phase. **All 7 phases are done.**
 
 ```sh
 go run .
 ```
+
+## Environment
+
+Needs Go 1.26.5 exactly (pinned in `go.mod`), and a C compiler if you also
+want `-race`. Neither was present when this was last verified (2026-08-11)
+— here's exactly what got installed and how, so it's reproducible.
+
+**Go 1.26.5** — installed without root, as a plain tarball, since no
+passwordless `sudo` was available in that environment:
+```sh
+curl -LO https://go.dev/dl/go1.26.5.linux-amd64.tar.gz
+# get the sha256 from https://go.dev/dl/?mode=json and verify before trusting it
+mkdir -p ~/sdk/go1.26.5
+tar -xzf go1.26.5.linux-amd64.tar.gz -C ~/sdk/go1.26.5 --strip-components=1
+export PATH=$HOME/sdk/go1.26.5/bin:$PATH
+export GOPATH=$HOME/go
+```
+Not on the default `PATH` — those two `export` lines are needed in every
+fresh shell before any `go` command, since this install doesn't touch
+system-wide config.
+
+**`gcc`** — only needed for `-race` (it requires `cgo`, which needs a C
+compiler present). This one does need root:
+```sh
+sudo apt-get update
+sudo apt-get install -y gcc
+```
+
+**Verification commands, in the order they were actually run:**
+```sh
+go build ./...
+gofmt -l .              # empty output = clean; gofmt -w . to fix
+go vet ./...
+go test ./...            # add -v for per-subtest output
+CGO_ENABLED=1 go test -race ./...
+go run .
+CGO_ENABLED=1 go run -race .
+```
+All of the above passed clean as of the 2026-08-11 Phase 7 verification —
+see "Phase 7 — built" below for what `-race` actually caught.
 
 ## Architecture
 
