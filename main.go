@@ -279,7 +279,7 @@ func main() {
 		// here looks wrong, not even the error return.
 		if err := u.Buy(buyAmount); err != nil { // phase-5: pointer receiver call on a copy — mutates the copy only
 			fmt.Printf("  %s: buy failed: %v\n", u.Name, err) // phase-5
-		}
+		} // phase-5
 	} // phase-5
 	fmt.Printf("  after:  %s tokens (users[0])  <- unchanged, Buy ran on a copy\n", // phase-5
 		formatUnits(users[0].TokenBalance))
@@ -290,19 +290,19 @@ func main() {
 	// users[2] for real before the uniform buy, so its later failure in the
 	// batch isn't a contrived error path.
 	fmt.Println("\n== Phase 5b: buyAll (mechanism) + a policy loop, and a buyer who can't afford it ==") // phase-5
-	if err := users[2].Buy(80 * Unit); err != nil {                                                     // phase-5: users[2] is the real element, no range involved
+	if err := users[2].Buy(80 * Unit); err != nil { // phase-5: users[2] is the real element, no range involved
 		fmt.Printf("  setup buy failed: %v\n", err) // phase-5
-	}
+	} // phase-5
 	results := buyAll(users, buyAmount) // phase-5: one call, one []error back — users is mutated in place by now
 	for i, err := range results {       // phase-5: ranging over []error, not []User — no copy-of-User trap here, there's no User in this slice
-		if err != nil {
+		if err != nil { // phase-5
 			// Skip and continue, not stop everything: one buyer's failure
 			// isn't the whole sale's problem, and Buy already validated
 			// before mutating, so a failed buyer is left untouched either
 			// way — nothing needs to be rolled back before moving on.
 			fmt.Printf("  %s: buy failed: %v\n", users[i].Name, err) // phase-5: users[i] still valid — same length, same order as results
 			continue                                                // phase-5: explicit — skips the success branch below for this i
-		}
+		} // phase-5
 		fmt.Printf("  %s: bought %s tokens\n", users[i].Name, formatUnits(buyAmount)) // phase-5
 	} // phase-5
 

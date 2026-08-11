@@ -135,8 +135,8 @@ above, just guarding against a moving price instead of an empty one.
 | 2 | `User` struct, `%+v` | done |
 | 3 | methods, value vs pointer receiver, errors | done |
 | 4 | slices and loops, `append` vs pre sized | done |
-| 5 | everyone buys, the `range` copy gotcha | next |
-| 6 | self review (`gofmt`, `go vet`) | ongoing, clean |
+| 5 | everyone buys, the `range` copy gotcha | done |
+| 6 | self review (`gofmt`, `go vet`) | reviewed — naming, receivers, tag consistency checked by hand; `gofmt`/`go vet` need a real Go toolchain to confirm |
 | 7 | maps, `Sale` state, interfaces, tests, flags, concurrency | later |
 
 ## Phase-by-phase: lines and concepts
