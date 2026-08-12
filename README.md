@@ -149,6 +149,16 @@ silently corrupts balances, not a crash you'd notice. `Sale.mu.Lock()` /
 into "one caller at a time" for the one part that actually needs it;
 everything before the lock (spawning, argument prep) still runs concurrently.
 
+**Why a mutex and not a channel.** Both fix the race; a channel just isn't
+the right shape for this problem. Channels earn their keep when goroutines
+need to hand work or results off to each other — a producer making
+something a consumer then processes, an assembly line. Phase 7c/7d isn't
+that: every goroutine is doing the exact same job (call `Buy`) on the exact
+same shared thing (`totalTokensSold`). No goroutine is producing something
+another goroutine needs to receive and process next. There's no line, no
+handoff — just 1,000 identical workers reaching for the same bank. That's
+why a lock fits and a channel would just be extra ceremony.
+
 **The mutex fixes corruption. It does not fix slippage — that's a separate
 guard.** Slippage is the gap between the price a buyer expected and the price
 they actually got, and on this curve it has a structural cause, not a bug:
